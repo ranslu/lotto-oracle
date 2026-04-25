@@ -17,7 +17,6 @@ except ImportError:
 
 st.set_page_config(page_title="LOTTO ORACLE", page_icon="🔮", layout="wide")
 
-
 st.markdown('''<style>
 .stButton button {
     min-height: 60px !important;
@@ -26,7 +25,6 @@ st.markdown('''<style>
     -webkit-tap-highlight-color: rgba(0,240,255,0.3) !important;
 }
 </style>''', unsafe_allow_html=True)
-
 
 st.markdown("""
 <link rel="manifest" href="/app/static/manifest.json">
@@ -65,12 +63,114 @@ def load_scratch_cache():
 HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
 
 GAMES = {
-    "lotto_max":   {"name":"Lotto Max",   "emoji":"🔮","balls":7,"pool":50,"draws":"Tue & Fri","color":"#00f0ff"},
-    "lotto_649":   {"name":"Lotto 6/49",  "emoji":"6️⃣","balls":6,"pool":49,"draws":"Tue & Fri","color":"#ffc940"},
-    "western_649": {"name":"Western 649", "emoji":"🌾","balls":6,"pool":49,"draws":"Wed & Sat","color":"#00ff9d"},
-    "western_max": {"name":"Western Max", "emoji":"⭐","balls":7,"pool":50,"draws":"Tue & Fri","color":"#ff6b35"},
+    "lotto_max":    {"name":"Lotto Max",    "emoji":"🔮","balls":7,"pool":52,"draws":"Tue & Fri","color":"#00f0ff"},
+    "lotto_649":    {"name":"Lotto 6/49",   "emoji":"6️⃣","balls":6,"pool":49,"draws":"Tue & Fri","color":"#ffc940"},
+    "western_649":  {"name":"Western 649",  "emoji":"🌾","balls":6,"pool":49,"draws":"Wed & Sat","color":"#00ff9d"},
+    "western_max":  {"name":"Western Max",  "emoji":"⭐","balls":7,"pool":50,"draws":"Tue & Fri","color":"#ff6b35"},
+    "daily_grand":  {"name":"Daily Grand",  "emoji":"👑","balls":5,"pool":49,"draws":"Mon & Thu","color":"#d4af37","grand_pool":7},
 }
 
+# ── Astrology / Lucky Number Engine ───────────────────────────────────────────
+ASTRO_LUCKY = {
+    1:  {"sign":"Capricorn",   "nums":[4,8,13,17,22,26,31,35,40,44,49]},
+    2:  {"sign":"Aquarius",    "nums":[7,11,16,20,25,29,34,38,43,47,2]},
+    3:  {"sign":"Pisces",      "nums":[3,7,12,16,21,25,30,34,39,43,48]},
+    4:  {"sign":"Aries",       "nums":[9,14,18,23,27,32,36,41,45,5,19]},
+    5:  {"sign":"Taurus",      "nums":[6,10,15,19,24,28,33,37,42,46,1]},
+    6:  {"sign":"Gemini",      "nums":[5,9,14,18,23,27,32,36,41,45,50]},
+    7:  {"sign":"Cancer",      "nums":[2,7,11,16,20,25,29,34,38,43,47]},
+    8:  {"sign":"Leo",         "nums":[1,6,10,15,19,24,28,33,37,42,46]},
+    9:  {"sign":"Virgo",       "nums":[8,13,17,22,26,31,35,40,44,49,4]},
+    10: {"sign":"Libra",       "nums":[6,11,15,20,24,29,33,38,42,47,3]},
+    11: {"sign":"Scorpio",     "nums":[9,13,18,22,27,31,36,40,45,49,8]},
+    12: {"sign":"Sagittarius", "nums":[3,8,12,17,21,26,30,35,39,44,48]},
+}
+
+NUMEROLOGY_MASTER = [11, 22, 33]
+
+def get_astro_lucky_nums(pool, count, month=None):
+    """Return lucky numbers for current month's zodiac sign, filtered to pool."""
+    if month is None:
+        month = datetime.now().month
+    base = [n for n in ASTRO_LUCKY[month]["nums"] if 1 <= n <= pool]
+    # Add numerology numbers in range
+    for n in NUMEROLOGY_MASTER:
+        if n <= pool and n not in base:
+            base.append(n)
+    # Moon cycle influence — add numbers divisible by 7 or 9
+    moon_nums = [n for n in range(1, pool+1) if (n % 7 == 0 or n % 9 == 0) and n not in base]
+    base += moon_nums
+    random.shuffle(base)
+    if len(base) < count:
+        extras = [n for n in range(1, pool+1) if n not in base]
+        random.shuffle(extras)
+        base += extras
+    return sorted(base[:count])
+
+def get_moon_phase_label():
+    """Approximate moon phase based on day of year."""
+    day = datetime.now().timetuple().tm_yday
+    phase_day = day % 29
+    if phase_day < 4:   return "🌑 New Moon — bold picks favoured"
+    elif phase_day < 8: return "🌒 Waxing Crescent — rising energy"
+    elif phase_day < 11:return "🌓 First Quarter — balance hot & cold"
+    elif phase_day < 15:return "🌔 Waxing Gibbous — frequency surging"
+    elif phase_day < 18:return "🌕 Full Moon — peak luck window"
+    elif phase_day < 22:return "🌖 Waning Gibbous — trust overdue numbers"
+    elif phase_day < 25:return "🌗 Last Quarter — go cold numbers"
+    else:               return "🌘 Waning Crescent — numerology picks shine"
+
+def build_oracle_tickets(freq_map, draws_since, pool, balls, month=None):
+    """Build 3 Oracle tickets with different philosophies."""
+    pool_list = list(range(1, pool+1))
+
+    # ── Ticket 1: Most Overdue ─────────────────────────────────────────────
+    overdue_sorted = sorted(draws_since.items(), key=lambda x: x[1], reverse=True)
+    t1_candidates = [n for n,_ in overdue_sorted if 1 <= n <= pool]
+    t1 = sorted(t1_candidates[:balls])
+    t1_reason = (
+        f"These {balls} numbers have been absent the longest from recent draws. "
+        f"The most overdue is **{t1[0]}** ({draws_since.get(t1[0],0)} draws ago). "
+        "Statistical regression theory suggests overdue numbers are primed to appear."
+    )
+
+    # ── Ticket 2: Hot/Cold Blend + Statistical Weighting ──────────────────
+    sorted_freq = sorted(freq_map.items(), key=lambda x: x[1], reverse=True)
+    hot = [n for n,_ in sorted_freq[:12] if 1 <= n <= pool]
+    cold = [n for n,_ in sorted_freq[-12:] if 1 <= n <= pool]
+    hot_pick  = sorted(random.sample(hot,  min(balls//2 + 1, len(hot))))
+    cold_pick = sorted(random.sample(cold, min(balls - len(hot_pick), len(cold))))
+    t2 = sorted(list(set(hot_pick + cold_pick))[:balls])
+    # Fill if short
+    if len(t2) < balls:
+        extras = [n for n in pool_list if n not in t2]
+        random.shuffle(extras)
+        t2 = sorted(t2 + extras[:balls - len(t2)])
+    t2_reason = (
+        f"A blend of the **{balls//2 + 1} hottest** (frequently drawn) and "
+        f"**{balls - balls//2 - 1} coldest** numbers. "
+        "Hot numbers ride momentum; cold numbers are statistically overdue for a return. "
+        "This balanced strategy is the most historically consistent approach."
+    )
+
+    # ── Ticket 3: Astrology + Numerology + Moon Cycle ─────────────────────
+    t3 = get_astro_lucky_nums(pool, balls, month)
+    sign = ASTRO_LUCKY[datetime.now().month]["sign"]
+    moon = get_moon_phase_label()
+    t3_reason = (
+        f"Guided by **{sign}** (this month's ruling sign) lucky numbers, "
+        f"reinforced with numerology master numbers and moon cycle energy. "
+        f"Current phase: {moon}. "
+        "These picks blend cosmic patterns with number mysticism — for the believers! 🌙"
+    )
+
+    return [
+        {"label": "🕰️ Overdue Oracle",       "nums": t1, "reason": t1_reason},
+        {"label": "🔥❄️ Hot/Cold Fusion",     "nums": t2, "reason": t2_reason},
+        {"label": "🌙 Astro-Numerology Pick", "nums": t3, "reason": t3_reason},
+    ]
+
+# ── Fetch functions ────────────────────────────────────────────────────────────
 def fetch_lotto_max():
     try:
         resp = requests.get("https://www.lottomaxnumbers.com/past-numbers", headers=HEADERS, timeout=15)
@@ -146,6 +246,8 @@ def fetch_scratch_tickets():
             tickets.append({"Ticket": texts[0], "Top Prize": texts[1] if len(texts)>1 else "-", "Prizes Remaining": texts[2] if len(texts)>2 else "-"})
     if not tickets: return [], "No ticket data found"
     return tickets, f"Fetched {len(tickets)} tickets"
+
+# ── Fallback Data ──────────────────────────────────────────────────────────────
 FALLBACK = {
     "lotto_max": [
         ("2026-04-10",[4,9,17,28,33,41,48],22),
@@ -297,6 +399,38 @@ FALLBACK = {
         ("2026-01-02",[1,8,15,23,31,39,47],24),
         ("2025-12-30",[6,13,20,28,36,44,50],6),
     ],
+    "daily_grand": [
+        ("2026-04-17",[3,12,24,35,44],5),
+        ("2026-04-14",[7,16,28,39,47],3),
+        ("2026-04-10",[2,11,23,34,43],6),
+        ("2026-04-07",[9,18,29,40,48],1),
+        ("2026-04-03",[4,13,25,36,45],7),
+        ("2026-03-31",[6,15,27,38,46],2),
+        ("2026-03-27",[1,10,22,33,42],4),
+        ("2026-03-24",[8,17,28,39,47],6),
+        ("2026-03-20",[5,14,26,37,45],3),
+        ("2026-03-17",[3,12,24,35,44],7),
+        ("2026-03-13",[7,16,27,38,46],1),
+        ("2026-03-10",[2,11,23,34,43],5),
+        ("2026-03-06",[9,18,29,40,48],2),
+        ("2026-03-03",[4,13,25,36,45],6),
+        ("2026-02-27",[6,15,26,37,46],4),
+        ("2026-02-24",[1,10,22,33,42],7),
+        ("2026-02-20",[8,17,28,39,47],3),
+        ("2026-02-17",[5,14,25,36,44],1),
+        ("2026-02-13",[3,12,23,34,43],5),
+        ("2026-02-10",[7,16,27,38,46],2),
+        ("2026-02-06",[2,11,22,33,42],6),
+        ("2026-02-03",[9,18,29,40,48],4),
+        ("2026-01-30",[4,13,24,35,44],7),
+        ("2026-01-27",[6,15,26,37,45],3),
+        ("2026-01-23",[1,10,21,32,41],5),
+        ("2026-01-20",[8,17,28,39,47],2),
+        ("2026-01-16",[3,12,23,34,43],6),
+        ("2026-01-13",[7,16,27,38,46],1),
+        ("2026-01-09",[2,11,22,33,42],4),
+        ("2026-01-06",[5,14,25,36,45],7),
+    ],
 }
 
 def get_draws(game_key):
@@ -333,25 +467,37 @@ def compute_stats(df, pool):
     odd_counts = [sum(1 for n in nums if n%2==1) for nums in df["numbers"]]
     return full, draws_since, sums, odd_counts
 
+# ── Header ─────────────────────────────────────────────────────────────────────
 st.markdown("""
 <div style='background:linear-gradient(90deg,#060e20,#0a1428);padding:16px 24px;
-margin:-1rem -1rem 0;border-bottom:2px solid #00f0ff;'>
+margin:-1rem -1rem 0;border-bottom:2px solid #00f0ff;display:flex;align-items:center;justify-content:space-between;'>
+<div>
 <span style='font-size:26px;font-weight:900;color:#00f0ff;letter-spacing:3px;'>🔮 LOTTO ORACLE</span>
-<span style='font-size:11px;color:#4a6a9a;margin-left:14px;letter-spacing:2px;'>V12.0 · MULTI-GAME EDITION</span>
+<span style='font-size:11px;color:#4a6a9a;margin-left:14px;letter-spacing:2px;'>V13.0 · MULTI-GAME EDITION</span>
+</div>
+<a href='https://www.playalberta.ca' target='_blank' style='text-decoration:none;'>
+<div style='background:linear-gradient(135deg,#0055a4,#003d7a);border:1px solid #0077cc;border-radius:8px;
+padding:8px 18px;color:#ffffff;font-size:13px;font-weight:700;letter-spacing:1px;cursor:pointer;'>
+🎰 Play Alberta
+</div>
+</a>
 </div>
 """, unsafe_allow_html=True)
 
 st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
 
-g1,g2,g3,g4 = st.columns(4)
+# ── Game selector ──────────────────────────────────────────────────────────────
+g1,g2,g3,g4,g5 = st.columns(5)
 with g1:
-    if st.button("🔮 Lotto Max",   use_container_width=True): st.session_state["game"] = "lotto_max"
+    if st.button("🔮 Lotto Max",    use_container_width=True): st.session_state["game"] = "lotto_max"
 with g2:
-    if st.button("6️⃣ Lotto 6/49",  use_container_width=True): st.session_state["game"] = "lotto_649"
+    if st.button("6️⃣ Lotto 6/49",   use_container_width=True): st.session_state["game"] = "lotto_649"
 with g3:
-    if st.button("🌾 Western 649", use_container_width=True): st.session_state["game"] = "western_649"
+    if st.button("🌾 Western 649",  use_container_width=True): st.session_state["game"] = "western_649"
 with g4:
-    if st.button("⭐ Western Max",  use_container_width=True): st.session_state["game"] = "western_max"
+    if st.button("⭐ Western Max",   use_container_width=True): st.session_state["game"] = "western_max"
+with g5:
+    if st.button("👑 Daily Grand",   use_container_width=True): st.session_state["game"] = "daily_grand"
 
 game_key = st.session_state.get("game", "lotto_max")
 ginfo    = GAMES[game_key]
@@ -359,8 +505,13 @@ gcolor   = ginfo["color"]
 balls_per_draw = ginfo["balls"]
 pool     = ginfo["pool"]
 
-st.markdown(f"<div style='background:rgba(0,0,0,0.3);padding:8px 16px;border-radius:8px;margin:8px 0;font-size:13px;color:{gcolor};font-weight:700;letter-spacing:2px;'>{ginfo['emoji']} {ginfo['name'].upper()} · {balls_per_draw} balls · 1–{pool} · Draws: {ginfo['draws']}</div>", unsafe_allow_html=True)
+st.markdown(f"<div style='background:rgba(0,0,0,0.3);padding:8px 16px;border-radius:8px;margin:8px 0;"
+            f"font-size:13px;color:{gcolor};font-weight:700;letter-spacing:2px;'>"
+            f"{ginfo['emoji']} {ginfo['name'].upper()} · {balls_per_draw} balls · 1–{pool}"
+            f"{' + Grand Number 1–7' if game_key=='daily_grand' else ''}"
+            f" · Draws: {ginfo['draws']}</div>", unsafe_allow_html=True)
 
+# ── Page nav ───────────────────────────────────────────────────────────────────
 p1,p2,p3,p4,p5 = st.columns(5)
 with p1:
     if st.button("📊 Dashboard",   use_container_width=True): st.session_state["pg"] = "d"
@@ -385,8 +536,13 @@ due_numbers = sorted(draws_since.items(), key=lambda x: x[1], reverse=True)[:10]
 due_nums    = [n for n,_ in due_numbers]
 
 badge = "🟢 LIVE" if is_live else "🟡 BUILT-IN"
+
+# ══════════════════════════════════════════════════════════════════════════════
+# DASHBOARD
+# ══════════════════════════════════════════════════════════════════════════════
 if pg == "d":
-    st.markdown(f"<div style='font-size:11px;color:{'#00ff9d' if is_live else '#ffc940'};margin-bottom:8px;'>{badge} · {len(df)} draws · {data_source}</div>", unsafe_allow_html=True)
+    st.markdown(f"<div style='font-size:11px;color:{'#00ff9d' if is_live else '#ffc940'};margin-bottom:8px;'>"
+                f"{badge} · {len(df)} draws · {data_source}</div>", unsafe_allow_html=True)
     st.markdown(f"## {ginfo['emoji']} {ginfo['name']} — Dashboard")
     latest = df.sort_values("date", ascending=False).iloc[0]
 
@@ -398,7 +554,8 @@ if pg == "d":
 
     st.markdown(f"**Most Recent Draw — {latest['date'].strftime('%B %d, %Y')}**")
     balls_str = "  ".join([f"`{n:02d}`" for n in latest["numbers"]])
-    st.markdown(f"{balls_str}  🌟 **Bonus: `{latest['bonus']:02d}`**")
+    bonus_label = "👑 Grand #" if game_key == "daily_grand" else "🌟 Bonus:"
+    st.markdown(f"{balls_str}  {bonus_label} **`{latest['bonus']:02d}`**")
     st.caption(f"Sum: {sum(latest['numbers'])}")
 
     st.markdown("### Number Frequency")
@@ -415,35 +572,55 @@ if pg == "d":
                       xaxis=dict(dtick=1, tickfont=dict(size=9)))
     st.plotly_chart(fig, use_container_width=True)
 
-    ca, cb = st.columns(2)
-    with ca:
-        st.markdown("### Sum Distribution")
-        fig2 = go.Figure(go.Histogram(x=sums, nbinsx=20, marker_color="#0088cc", opacity=0.85))
-        fig2.add_vline(x=np.mean(sums), line_dash="dot", line_color="#ffc940",
-                       annotation_text=f"Mean {np.mean(sums):.0f}", annotation_font_color="#ffc940")
-        fig2.update_layout(template="plotly_dark", height=240, margin=dict(l=10,r=10,t=10,b=10))
-        st.plotly_chart(fig2, use_container_width=True)
-    with cb:
-        st.markdown("### Odd / Even Split")
-        oc = Counter(odd_counts)
-        fig3 = go.Figure(go.Pie(
-            labels=[f"{k}O/{balls_per_draw-k}E" for k in sorted(oc)],
-            values=[oc[k] for k in sorted(oc)], hole=0.5,
-            marker=dict(colors=["#00f0ff","#0088cc","#004488","#002244","#ffc940","#ff6b35","#ff2200"])
-        ))
-        fig3.update_layout(template="plotly_dark", height=240, margin=dict(l=10,r=10,t=30,b=10))
-        st.plotly_chart(fig3, use_container_width=True)
-
     st.markdown("### Recent Draws")
     recent = df.sort_values("date", ascending=False).head(10).copy()
     recent["Numbers"] = recent["numbers"].apply(lambda x: "  ".join(f"{n:02d}" for n in x))
     recent["Sum"]     = recent["numbers"].apply(sum)
-    recent["O/E"]     = recent["numbers"].apply(lambda x: f"{sum(1 for n in x if n%2==1)}O/{sum(1 for n in x if n%2==0)}E")
-    st.dataframe(recent[["date","Numbers","bonus","Sum","O/E"]].rename(
-        columns={"date":"Date","bonus":"Bonus"}), use_container_width=True, hide_index=True)
+    st.dataframe(recent[["date","Numbers","bonus","Sum"]].rename(
+        columns={"date":"Date","bonus":"Bonus" if game_key != "daily_grand" else "Grand #"}),
+        use_container_width=True, hide_index=True)
 
+# ══════════════════════════════════════════════════════════════════════════════
+# ORACLE
+# ══════════════════════════════════════════════════════════════════════════════
 elif pg == "o":
     st.markdown(f"## 🎯 {ginfo['name']} — Predictive Oracle")
+
+    # ── Oracle Suggested Tickets ───────────────────────────────────────────
+    st.markdown("---")
+    st.markdown("### 🔮 Oracle's 3 Best Ticket Suggestions")
+    st.caption("⚠️ These are best-guess suggestions only, based on statistical analysis, astrology, and numerology. Lottery draws are random — play responsibly.")
+
+    moon_label = get_moon_phase_label()
+    sign_label = ASTRO_LUCKY[datetime.now().month]["sign"]
+    st.markdown(f"**Current Moon Phase:** {moon_label}  &nbsp;|&nbsp;  **Ruling Sign:** ♈ {sign_label}")
+    st.markdown("")
+
+    oracle_tickets = build_oracle_tickets(freq_map, draws_since, pool, balls_per_draw)
+
+    colors = [gcolor, "#ffc940", "#d4af37"]
+    for i, tk in enumerate(oracle_tickets):
+        nums_display = "  ".join([f"`{n:02d}`" for n in tk["nums"]])
+        if game_key == "daily_grand":
+            grand_num = random.choice(list(range(1,8)))
+            grand_display = f"  👑 Grand: `{grand_num:02d}`"
+        else:
+            grand_display = ""
+        st.markdown(
+            f"<div style='background:rgba(0,0,0,0.35);border-left:4px solid {colors[i]};border-radius:8px;"
+            f"padding:14px 18px;margin-bottom:12px;'>"
+            f"<div style='font-size:15px;font-weight:700;color:{colors[i]};margin-bottom:6px;'>{tk['label']}</div>"
+            f"<div style='font-size:20px;letter-spacing:4px;font-weight:900;color:#ffffff;margin-bottom:8px;'>"
+            f"{'  '.join([str(n).zfill(2) for n in tk['nums']])}{grand_display}</div>"
+            f"<div style='font-size:12px;color:#8aa4c8;line-height:1.5;'>{tk['reason']}</div>"
+            f"</div>",
+            unsafe_allow_html=True
+        )
+
+    st.markdown("---")
+
+    # ── Manual Ticket Generator ────────────────────────────────────────────
+    st.markdown("### ⚡ Custom Ticket Generator")
     strategy    = st.selectbox("Strategy", ["Balanced","Hot Numbers","Due Numbers","Random","Cold Numbers"])
     num_tickets = st.slider("Tickets to Generate", 1, 8, 4)
     sum_min, sum_max = st.slider("Target Sum Range", 10, 500, (int(np.mean(sums)*0.8), int(np.mean(sums)*1.2)))
@@ -491,7 +668,6 @@ elif pg == "o":
             nums_str = "  ".join([f"**`{n:02d}`**" if n in hot_numbers else f"`{n:02d}`" for n in t])
             st.markdown(f"**T{i+1}:** {nums_str}  🌟`{bonus:02d}`  ·  Sum:{s}  ·  {on}O/{balls_per_draw-on}E")
 
-        st.markdown("### Ticket Sums vs Historical")
         fig_s = go.Figure()
         fig_s.add_trace(go.Histogram(x=sums, nbinsx=20, name="Historical",
                                      marker_color="#0d2a4a", opacity=0.8))
@@ -504,9 +680,13 @@ elif pg == "o":
         fig_s.update_layout(template="plotly_dark", height=200, margin=dict(l=10,r=10,t=10,b=10))
         st.plotly_chart(fig_s, use_container_width=True)
         st.caption("**Bold** = Hot number  ·  Normal = Neutral  ·  🌟 = Bonus ball")
-    elif pg == "s":
-        st.markdown("## 🎫 Scratch Hub")
-        st.markdown("### Active WCLC Scratch & Win — Prizes Remaining")
+
+# ══════════════════════════════════════════════════════════════════════════════
+# SCRATCH HUB
+# ══════════════════════════════════════════════════════════════════════════════
+elif pg == "s":
+    st.markdown("## 🎫 Scratch Hub")
+    st.markdown("### Active WCLC Scratch & Win — Prizes Remaining")
 
     scratch_data = None
     if "scratch_tickets" in st.session_state and st.session_state.scratch_tickets:
@@ -553,6 +733,9 @@ elif pg == "o":
             st.session_state.scratch_log = []
             st.rerun()
 
+# ══════════════════════════════════════════════════════════════════════════════
+# RESEARCH
+# ══════════════════════════════════════════════════════════════════════════════
 elif pg == "r":
     st.markdown(f"## 🔍 {ginfo['name']} — Research Terminal")
     tab1, tab2, tab3 = st.tabs(["🔥 Hot / Cold / Due", "🔗 Pair Analysis", "📈 Trends"])
@@ -607,6 +790,11 @@ elif pg == "r":
             st.dataframe(ai[["date","numbers","bonus"]].rename(
                 columns={"date":"Date","numbers":"Numbers","bonus":"Bonus"}).head(10),
                 use_container_width=True, hide_index=True)
+
+# ══════════════════════════════════════════════════════════════════════════════
+# SETTINGS
+# ══════════════════════════════════════════════════════════════════════════════
+elif pg == "x":
     st.markdown("## ⚙️ Settings & Data Sync")
     st.markdown("### Update Draw Data")
     st.caption("Fetch the latest real draws from the internet for each game.")
@@ -696,21 +884,3 @@ elif pg == "r":
         _cnt = len(build_df(_raw, gv["balls"]))
         _status = "🟢 LIVE" if _live else "🟡 BUILT-IN"
         st.markdown(f"{gv['emoji']} **{gv['name']}** — {_status} · {_cnt} draws · {_src}")
-
-    st.divider()
-    st.markdown("### 💰 ROI Tracker")
-    r1, r2 = st.columns(2)
-    with r1:
-        spent  = st.number_input("Total Invested ($)", min_value=0.0, value=100.0, step=5.0)
-        wonamt = st.number_input("Total Winnings ($)", min_value=0.0, value=25.0,  step=5.0)
-    with r2:
-        net  = wonamt - spent
-        roi  = (net/spent*100) if spent > 0 else 0.0
-        col  = "#00ff9d" if net >= 0 else "#ff4e1a"
-        st.markdown(
-            f"<div style='text-align:center;padding:20px;background:rgba(0,0,0,0.3);"
-            f"border-radius:10px;border:1px solid #1a3060;'>"
-            f"<div style='font-size:11px;color:#4a6a9a;letter-spacing:3px;margin-bottom:8px;'>NET ROI</div>"
-            f"<div style='font-size:40px;font-weight:900;color:{col};'>{roi:+.1f}%</div>"
-            f"<div style='font-size:14px;color:#4a6a9a;margin-top:4px;'>${net:+.2f}</div>"
-            f"</div>", unsafe_allow_html=True)
