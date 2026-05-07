@@ -210,248 +210,6 @@ def fetch_wclc(game_key):
     if not draws: return [],f"No draws found for {game_key}"
     return draws,f"Fetched {len(draws)} draws · latest: {draws[0][0]}"
 
-def fetch_daily_grand():
-    try:
-        resp = requests.get(
-            "https://ca.lottonumbers.com/daily-grand/past-numbers",
-            headers=HEADERS, timeout=15)
-        resp.raise_for_status()
-    except Exception as e:
-        return [], f"Error: {e}"
-    soup = BeautifulSoup(resp.text, "lxml")
-    draws = []
-    for row in soup.select("table tr"):
-        cells = row.find_all("td")
-        if len(cells) < 2: continue
-        # Try multiple date formats
-        date_txt = cells[0].get_text(strip=True)
-        draw_date = None
-        for fmt in ["%d %b %Y", "%B %d, %Y", "%b %d, %Y", "%Y-%m-%d"]:
-            try:
-                draw_date = datetime.strptime(date_txt, fmt).strftime("%Y-%m-%d")
-                break
-            except ValueError:
-                continue
-        if not draw_date: continue
-        # Get main numbers
-        nums = []
-        for li in cells[1].find_all("li"):
-            t = li.get_text(strip=True)
-            if t.isdigit(): nums.append(int(t))
-        # Get grand number
-        grand = 0
-        if len(cells) > 2:
-            gt = cells[2].get_text(strip=True)
-            if gt.isdigit(): grand = int(gt)
-        if len(nums) == 5:
-            draws.append((draw_date, sorted(nums), grand))
-    # Fallback: try span/div based parsing
-    if not draws:
-        for row in soup.find_all("tr"):
-            tds = row.find_all("td")
-            if len(tds) < 2: continue
-            date_txt = tds[0].get_text(strip=True)
-            draw_date = None
-            for fmt in ["%d %b %Y", "%B %d, %Y", "%b %d, %Y", "%Y-%m-%d"]:
-                try:
-                    draw_date = datetime.strptime(date_txt, fmt).strftime("%Y-%m-%d")
-                    break
-                except ValueError:
-                    continue
-            if not draw_date: continue
-            all_nums = [int(x) for x in tds[1].get_text().split() if x.isdigit()]
-            if len(all_nums) >= 5:
-                draws.append((draw_date, sorted(all_nums[:5]),
-                              all_nums[5] if len(all_nums) > 5 else 0))
-    if not draws:
-        return [], "No Daily Grand data found — site may have changed layout"
-    return draws, f"Fetched {len(draws)} draws · latest: {draws[0][0]}"
-
-
-def fetch_winners():
-    """Fetch recent winners with article links from WCLC Alberta, WCLC Recent, and OLG."""
-    winners = []
-    game_keywords = ["LOTTO MAX","LOTTO 6/49","WESTERN MAX","WESTERN 649","DAILY GRAND",
-                     "Lotto Max","Lotto 6/49","Western Max","Western 649","Daily Grand"]
-    prize_keywords = ["wins $","won $","WIN","million","Million","$1M","$2M","jackpot","prize"]
-
-    def detect_game(txt):
-        mapping = {
-            "lotto max": "Lotto Max",
-            "lotto 6/49": "Lotto 6/49",
-            "western max": "Western Max",
-            "western 649": "Western 649",
-            "daily grand": "Daily Grand",
-        }
-        tl = txt.lower()
-        for k, v in mapping.items():
-            if k in tl: return v
-        return "Lottery"
-
-    def extract_prize(txt):
-        """Try to pull a dollar amount from text."""
-        import re
-        m = re.search(r'\$[\d,]+(?:\.\d+)?(?:\s*[Mm]illion)?', txt)
-        return m.group(0) if m else ""
-
-    # --- WCLC Alberta Winners ---
-    try:
-        resp = requests.get(
-            "https://www.wclc.com/media-centre/recent-winner-releases/alberta-winner-releases.htm",
-            headers=HEADERS, timeout=15)
-        resp.raise_for_status()
-        soup = BeautifulSoup(resp.text, "lxml")
-        # Grab links with title text
-        for a in soup.find_all("a", href=True):
-            txt = a.get_text(separator=" ", strip=True)
-            if not txt or len(txt) < 15: continue
-            href = a["href"]
-            if any(kw in txt for kw in prize_keywords) or any(g in txt for g in game_keywords):
-                full_url = href if href.startswith("http") else "https://www.wclc.com" + href
-                prize = extract_prize(txt)
-                winners.append({
-                    "source": "WCLC Alberta",
-                    "story": txt[:220],
-                    "game": detect_game(txt),
-                    "location": "Alberta",
-                    "prize": prize,
-                    "url": full_url,
-                })
-        # Also grab plain list items for headlines without links
-        for li in soup.select("li"):
-            txt = li.get_text(separator=" ", strip=True)
-            if not txt or len(txt) < 15: continue
-            if any(kw in txt for kw in prize_keywords):
-                a_tag = li.find("a", href=True)
-                url = ""
-                if a_tag:
-                    href = a_tag["href"]
-                    url = href if href.startswith("http") else "https://www.wclc.com" + href
-                prize = extract_prize(txt)
-                # Avoid duplicates
-                if not any(w["story"][:50] == txt[:50] for w in winners):
-                    winners.append({
-                        "source": "WCLC Alberta",
-                        "story": txt[:220],
-                        "game": detect_game(txt),
-                        "location": "Alberta",
-                        "prize": prize,
-                        "url": url,
-                    })
-    except Exception:
-        pass
-
-    # --- WCLC Recent Winners (all provinces) ---
-    try:
-        resp2 = requests.get(
-            "https://www.wclc.com/media-centre/recent-winner-releases/recent-winner-releases.htm",
-            headers=HEADERS, timeout=15)
-        resp2.raise_for_status()
-        soup2 = BeautifulSoup(resp2.text, "lxml")
-        for a in soup2.find_all("a", href=True):
-            txt = a.get_text(separator=" ", strip=True)
-            if not txt or len(txt) < 15: continue
-            href = a["href"]
-            if any(kw in txt for kw in prize_keywords) or any(g in txt for g in game_keywords):
-                full_url = href if href.startswith("http") else "https://www.wclc.com" + href
-                prize = extract_prize(txt)
-                if not any(w["url"] == full_url for w in winners):
-                    winners.append({
-                        "source": "WCLC",
-                        "story": txt[:220],
-                        "game": detect_game(txt),
-                        "location": "Western Canada",
-                        "prize": prize,
-                        "url": full_url,
-                    })
-    except Exception:
-        pass
-
-    # --- OLG Winners news feed ---
-    try:
-        resp3 = requests.get(
-            "https://about.olg.ca/?s=winners",
-            headers=HEADERS, timeout=15)
-        resp3.raise_for_status()
-        soup3 = BeautifulSoup(resp3.text, "lxml")
-        # OLG uses article tags with h2/h3 + links
-        for article in soup3.select("article, .post, .entry"):
-            a_tag = article.find("a", href=True)
-            title_tag = article.find(["h2","h3","h4"])
-            txt = title_tag.get_text(strip=True) if title_tag else ""
-            if not txt:
-                txt = a_tag.get_text(strip=True) if a_tag else ""
-            if not txt or len(txt) < 10: continue
-            # Get excerpt
-            excerpt_tag = article.find("p")
-            excerpt = excerpt_tag.get_text(strip=True)[:180] if excerpt_tag else ""
-            full_story = f"{txt} — {excerpt}" if excerpt else txt
-            url = a_tag["href"] if a_tag else ""
-            if any(kw in full_story for kw in prize_keywords):
-                prize = extract_prize(full_story)
-                if not any(w["story"][:40] == full_story[:40] for w in winners):
-                    winners.append({
-                        "source": "OLG",
-                        "story": full_story[:220],
-                        "game": detect_game(full_story),
-                        "location": "Ontario",
-                        "prize": prize,
-                        "url": url,
-                    })
-        # Fallback: grab all links on page
-        if not any(w["source"] == "OLG" for w in winners):
-            for a in soup3.find_all("a", href=True):
-                txt = a.get_text(strip=True)
-                href = a["href"]
-                if len(txt) < 15: continue
-                if any(kw in txt for kw in prize_keywords):
-                    prize = extract_prize(txt)
-                    winners.append({
-                        "source": "OLG",
-                        "story": txt[:220],
-                        "game": detect_game(txt),
-                        "location": "Ontario",
-                        "prize": prize,
-                        "url": href,
-                    })
-    except Exception:
-        pass
-
-    # --- Lottomaxnumbers prize breakdown links ---
-    try:
-        resp4 = requests.get(
-            "https://www.lottomaxnumbers.com/past-numbers",
-            headers=HEADERS, timeout=15)
-        resp4.raise_for_status()
-        soup4 = BeautifulSoup(resp4.text, "lxml")
-        for a in soup4.find_all("a", href=True):
-            txt = a.get_text(strip=True)
-            href = a["href"]
-            if "prize" in href.lower() or "winner" in txt.lower() or "breakdown" in txt.lower():
-                full_url = href if href.startswith("http") else "https://www.lottomaxnumbers.com" + href
-                if len(txt) > 5 and not any(w["url"] == full_url for w in winners):
-                    winners.append({
-                        "source": "Lotto Max Numbers",
-                        "story": txt[:220],
-                        "game": "Lotto Max",
-                        "location": "Canada",
-                        "prize": extract_prize(txt),
-                        "url": full_url,
-                    })
-    except Exception:
-        pass
-
-    # Deduplicate and clean
-    seen = set()
-    clean = []
-    for w in winners:
-        key = w["story"][:60]
-        if key not in seen:
-            seen.add(key)
-            clean.append(w)
-
-    return clean[:60], f"Fetched {len(clean[:60])} winner stories"
-
 def fetch_scratch_tickets():
     try:
         resp=requests.get("https://www.wclc.com/games/scratch-win/prizes-remaining-1.htm",headers=HEADERS,timeout=15)
@@ -689,7 +447,7 @@ st.markdown(
     f"{' + Grand Number 1–7' if game_key=='daily_grand' else ''}"
     f" &nbsp;·&nbsp; Draws: {ginfo['draws']}</span></div>",unsafe_allow_html=True)
 
-p1,p2,p3,p4,p5,p6=st.columns(6)
+p1,p2,p3,p4,p5=st.columns(5)
 with p1:
     if st.button("📊 Dashboard",   use_container_width=True): st.session_state["pg"]="d"
 with p2:
@@ -697,10 +455,8 @@ with p2:
 with p3:
     if st.button("🔬 Research",    use_container_width=True): st.session_state["pg"]="r"
 with p4:
-    if st.button("🏆 Winners",     use_container_width=True): st.session_state["pg"]="w"
-with p5:
     if st.button("🎫 Scratch Hub", use_container_width=True): st.session_state["pg"]="s"
-with p6:
+with p5:
     if st.button("⚙️ Settings",    use_container_width=True): st.session_state["pg"]="x"
 
 st.divider()
@@ -722,7 +478,7 @@ badge="🟢 LIVE" if is_live else "🟡 BUILT-IN"
 if pg=="d":
     st.markdown(f"<span style='font-size:11px;color:{'#00ff9d' if is_live else '#ffc940'};'>"
                 f"{badge} · {len(df)} draws · {data_source}</span>",unsafe_allow_html=True)
-    st.markdown(f"<h2 style='color:#00f0ff;font-weight:900;text-shadow:0 0 10px rgba(0,240,255,0.4);'>{ginfo['emoji']} {ginfo['name']} — Dashboard</h2>",unsafe_allow_html=True)
+    st.markdown(f"## {ginfo['emoji']} {ginfo['name']} — Dashboard")
     latest=df.sort_values("date",ascending=False).iloc[0]
     c1,c2,c3,c4=st.columns(4)
     with c1: st.metric("Draws Loaded",len(df))
@@ -730,14 +486,14 @@ if pg=="d":
     with c3: st.metric("🔥 Hottest #",sorted_freq[0][0],f"{sorted_freq[0][1]} hits")
     with c4: st.metric("⏳ Most Overdue",due_numbers[0][0],f"{due_numbers[0][1]} draws ago")
 
-    st.markdown(f"<p style='color:#ffc940;font-weight:800;font-size:15px;'>⭐ Most Recent Draw — {latest['date'].strftime('%B %d, %Y')}</p>",unsafe_allow_html=True)
+    st.markdown(f"**Most Recent Draw — {latest['date'].strftime('%B %d, %Y')}**")
     bonus_label="👑 Grand #" if game_key=="daily_grand" else "⭐ Bonus:"
     bh=render_balls(latest["numbers"],freq_map,draws_since,pool,hot_threshold,cold_threshold)
     bb=f"<span class='ball ball-grand'>{latest['bonus']:02d}</span>"
     st.markdown(f"<div style='margin:8px 0;'>{bh} &nbsp; {bonus_label} {bb}</div>",unsafe_allow_html=True)
     st.caption("🔴=Hot  🔵=Cold  🟡=Overdue  🩵=Normal")
 
-    st.markdown("<h3 style='color:#00f0ff;font-weight:800;'>📊 Number Frequency</h3>",unsafe_allow_html=True)
+    st.markdown("### 📊 Number Frequency")
     nums_l=list(range(1,pool+1)); hits_l=[freq_map[n] for n in nums_l]
     bar_cols=[gcolor if h>=hot_threshold else "#1e3a6e" if h<=cold_threshold else "#2a5298" for h in hits_l]
     fig=go.Figure(go.Bar(x=nums_l,y=hits_l,marker_color=bar_cols,
@@ -748,7 +504,7 @@ if pg=="d":
                       xaxis=dict(dtick=1,tickfont=dict(size=9)),plot_bgcolor="#050d1a",paper_bgcolor="#050d1a")
     st.plotly_chart(fig,use_container_width=True)
 
-    st.markdown("<h3 style='color:#00f0ff;font-weight:800;'>📋 Recent Draws</h3>",unsafe_allow_html=True)
+    st.markdown("### 📋 Recent Draws")
     recent=df.sort_values("date",ascending=False).head(15).copy()
     recent["Numbers"]=recent["numbers"].apply(lambda x:"  ".join(f"{n:02d}" for n in x))
     recent["Sum"]=recent["numbers"].apply(sum)
@@ -761,7 +517,7 @@ if pg=="d":
 # ORACLE
 # ════════════════════════════════════════════════════════════════════════════════
 elif pg=="o":
-    st.markdown(f"<h2 style='color:#00f0ff;font-weight:900;text-shadow:0 0 10px rgba(0,240,255,0.4);'>🎯 {ginfo['name']} — Predictive Oracle</h2>",unsafe_allow_html=True)
+    st.markdown(f"## 🎯 {ginfo['name']} — Predictive Oracle")
     moon_label=get_moon_phase_label()
     sign_label=ASTRO_LUCKY[datetime.now().month]["sign"]
     st.markdown(
@@ -771,7 +527,7 @@ elif pg=="o":
         f"&nbsp;&nbsp;|&nbsp;&nbsp;<span style='color:#a080ff;'>♈ Ruling Sign: {sign_label}</span>"
         f"</div>",unsafe_allow_html=True)
 
-    st.markdown("<h3 style='color:#00f0ff;font-weight:800;'>🔮 Oracle's 3 Best Ticket Suggestions</h3>",unsafe_allow_html=True)
+    st.markdown("### 🔮 Oracle's 3 Best Ticket Suggestions")
     st.caption("⚠️ Best-guess only — based on statistics, astrology & numerology. Lottery draws are random. Play responsibly.")
     oracle_tickets=build_oracle_tickets(freq_map,draws_since,pool,balls_per_draw)
     for tk in oracle_tickets:
@@ -789,7 +545,7 @@ elif pg=="o":
             f"</div>",unsafe_allow_html=True)
 
     st.markdown("---")
-    st.markdown("<h3 style='color:#ffc940;font-weight:800;'>⚡ Custom Ticket Generator</h3>",unsafe_allow_html=True)
+    st.markdown("### ⚡ Custom Ticket Generator")
     strategy=st.selectbox("Strategy",["Balanced","Hot Numbers","Due Numbers","Cold Numbers","Random"])
     num_tickets=st.slider("Tickets to Generate",1,8,4)
     sum_min,sum_max=st.slider("Target Sum Range",10,500,(int(np.mean(sums)*0.8),int(np.mean(sums)*1.2)))
@@ -820,7 +576,7 @@ elif pg=="o":
 
     tkey=f"tickets_{game_key}"
     if tkey in st.session_state:
-        st.markdown("<h3 style='color:#00ff9d;font-weight:800;'>🎟️ Generated Tickets</h3>",unsafe_allow_html=True)
+        st.markdown("### 🎟️ Generated Tickets")
         for i,t in enumerate(st.session_state[tkey]):
             bonus=random.randint(1,pool); s=sum(t); on=sum(1 for n in t if n%2==1)
             bh=render_balls(t,freq_map,draws_since,pool,hot_threshold,cold_threshold)
@@ -847,12 +603,12 @@ elif pg=="o":
 # RESEARCH
 # ════════════════════════════════════════════════════════════════════════════════
 elif pg=="r":
-    st.markdown(f"<h2 style='color:#00f0ff;font-weight:900;text-shadow:0 0 10px rgba(0,240,255,0.4);'>🔬 {ginfo['name']} — Research Terminal</h2>",unsafe_allow_html=True)
+    st.markdown(f"## 🔬 {ginfo['name']} — Research Terminal")
 
     PERIODS={"Last 15 Draws":15,"Last 40 Draws":40,"Last 100 Draws":100,"All Draws":min(400,len(df))}
     if "research_period" not in st.session_state: st.session_state.research_period="Last 40 Draws"
 
-    st.markdown("<h3 style='color:#00f0ff;font-weight:800;'>📅 Analysis Period</h3>",unsafe_allow_html=True)
+    st.markdown("### 📅 Analysis Period")
     pc=st.columns(4)
     for i,(lbl,nd) in enumerate(PERIODS.items()):
         with pc[i]:
@@ -877,7 +633,7 @@ elif pg=="r":
     show_comprehensive=st.toggle("🔭 Comprehensive Multi-Period Comparison",value=False)
 
     if show_comprehensive:
-        st.markdown("<h3 style='color:#ffc940;font-weight:800;'>🔭 All Periods Compared</h3>",unsafe_allow_html=True)
+        st.markdown("### 🔭 All Periods Compared")
         colors_c=["#00f0ff","#ffc940","#00ff9d","#ff6b35"]
         ctab1,ctab2,ctab3=st.tabs(["🔥 Hot","❄️ Cold","⏳ Overdue"])
 
@@ -923,17 +679,7 @@ elif pg=="r":
                             f"<span style='color:#4a7a9f;font-size:10px;'>{since}d</span></div>",unsafe_allow_html=True)
         st.markdown("---")
 
-    # ── FIX 1: Bright visible heading ──
-    st.markdown(
-        f"<div style='background:linear-gradient(90deg,rgba(0,240,255,0.08),rgba(0,240,255,0.02));"
-        f"border-left:4px solid #00f0ff;border-radius:10px;padding:12px 20px;margin:8px 0 16px 0;'>"
-        f"<span style='font-size:20px;font-weight:900;color:#00f0ff;"
-        f"text-shadow:0 0 12px rgba(0,240,255,0.6);letter-spacing:1px;'>"
-        f"🔥❄️⏳ Hot · Cold · Overdue</span>"
-        f"<span style='font-size:14px;color:#ffc940;font-weight:700;margin-left:12px;'>"
-        f"— {st.session_state.research_period}</span></div>",
-        unsafe_allow_html=True)
-
+    st.markdown(f"### 🔥❄️⏳ Hot · Cold · Overdue — {st.session_state.research_period}")
     rh,rc,rd=st.columns(3)
 
     with rh:
@@ -989,7 +735,7 @@ elif pg=="r":
         "🔗 Pairs","📅 Draw Day","🔢 Consecutive","📦 Groups","🎟️ Ticket Checker","🎲 Odds","Δ Delta"])
 
     with tab1:
-        st.markdown("<p style='color:#a0c4e8;font-weight:700;font-size:15px;'>📊 Top 20 Number Pairs</p>",unsafe_allow_html=True)
+        st.markdown("**Top 20 Number Pairs**")
         pairs=Counter()
         sub_df=df.sort_values("date",ascending=False).head(n_draws)
         for nums in sub_df["numbers"]:
@@ -1011,7 +757,7 @@ elif pg=="r":
             st.plotly_chart(fig_h,use_container_width=True)
 
     with tab2:
-        st.markdown("<p style='color:#a0c4e8;font-weight:700;font-size:15px;'>📅 Do numbers favour certain draw days?</p>",unsafe_allow_html=True)
+        st.markdown("**Do numbers favour certain draw days?**")
         sub_df=df.sort_values("date",ascending=False).head(n_draws).copy()
         sub_df["day"]=sub_df["date"].dt.day_name()
         days=sub_df["day"].unique()
@@ -1033,7 +779,7 @@ elif pg=="r":
         else: st.info("Need draws on multiple days to show this analysis.")
 
     with tab3:
-        st.markdown("<p style='color:#a0c4e8;font-weight:700;font-size:15px;'>🔢 How often do consecutive number pairs appear?</p>",unsafe_allow_html=True)
+        st.markdown("**How often do consecutive number pairs appear?**")
         sub_df=df.sort_values("date",ascending=False).head(n_draws)
         consec=[sum(1 for i in range(len(sorted(nums))-1) if sorted(nums)[i+1]-sorted(nums)[i]==1) for nums in sub_df["numbers"]]
         cc=Counter(consec)
@@ -1045,7 +791,7 @@ elif pg=="r":
         st.markdown(f"Avg consecutive pairs per draw: **{np.mean(consec):.1f}**")
 
     with tab4:
-        st.markdown("<p style='color:#a0c4e8;font-weight:700;font-size:15px;'>📦 Low / Mid / High number distribution</p>",unsafe_allow_html=True)
+        st.markdown("**Low / Mid / High number distribution**")
         third=pool//3
         sub_df=df.sort_values("date",ascending=False).head(n_draws)
         low_c=[sum(1 for n in nums if n<=third) for nums in sub_df["numbers"]]
@@ -1061,7 +807,7 @@ elif pg=="r":
         st.markdown(f"Avg: **Low={np.mean(low_c):.1f}** · **Mid={np.mean(mid_c):.1f}** · **High={np.mean(hi_c):.1f}**")
 
     with tab5:
-        st.markdown("<p style='color:#a0c4e8;font-weight:700;font-size:15px;'>🎟️ Enter your numbers — see how close you've been historically</p>",unsafe_allow_html=True)
+        st.markdown("**Enter your numbers — see how close you've been historically**")
         user_nums=st.multiselect(f"Pick {balls_per_draw} numbers (1–{pool})",list(range(1,pool+1)),max_selections=balls_per_draw)
         if len(user_nums)==balls_per_draw:
             sub_df=df.sort_values("date",ascending=False).head(n_draws)
@@ -1086,7 +832,7 @@ elif pg=="r":
         else: st.info(f"Select exactly {balls_per_draw} numbers above.")
 
     with tab6:
-        st.markdown("<p style='color:#a0c4e8;font-weight:700;font-size:15px;'>🎲 Prize odds for each match level</p>",unsafe_allow_html=True)
+        st.markdown("**Prize odds for each match level**")
         prize_data={
             "lotto_max":   {7:"1 in 33,294,800","6+B":"1 in 6,028,696",6:"1 in 218,530",5:"1 in 1,381","4+B":"1 in 1,105",4:"1 in 82.9",3:"1 in 8.5"},
             "lotto_649":   {6:"1 in 13,983,816",5:"1 in 55,492",4:"1 in 1,033",3:"1 in 56.7",2:"1 in 8.3"},
@@ -1106,7 +852,7 @@ elif pg=="r":
                 f"<span style='color:{c};font-weight:900;font-size:15px;'>{odd}</span></div>",unsafe_allow_html=True)
 
     with tab7:
-        st.markdown("<p style='color:#a0c4e8;font-weight:700;font-size:15px;'>Δ Delta System — gaps between consecutive drawn numbers</p>",unsafe_allow_html=True)
+        st.markdown("**Δ Delta System — gaps between consecutive drawn numbers**")
         sub_df=df.sort_values("date",ascending=False).head(n_draws)
         all_deltas=[]
         for nums in sub_df["numbers"]:
@@ -1119,7 +865,7 @@ elif pg=="r":
                             xaxis_title="Delta",yaxis_title="Frequency")
         st.plotly_chart(fig_d,use_container_width=True)
         st.markdown(f"Avg delta: **{np.mean(all_deltas):.1f}** · Most common: **{top_deltas[0][0]}** ({top_deltas[0][1]} times)")
-        st.markdown("<p style='color:#d4af37;font-weight:700;font-size:15px;'>🔮 Delta Ticket Suggestion</p>",unsafe_allow_html=True)
+        st.markdown("**🔮 Delta Ticket Suggestion**")
         common_d=[d for d,_ in dc.most_common(balls_per_draw+2)]
         start=random.randint(1,10); delta_ticket=[start]
         for d in common_d[:balls_per_draw-1]:
@@ -1130,7 +876,7 @@ elif pg=="r":
         st.markdown(f"<div style='background:rgba(0,0,0,0.4);border-left:4px solid {gcolor};border-radius:8px;padding:12px;'>{bh}</div>",unsafe_allow_html=True)
 
     st.markdown("---")
-    st.markdown("<h3 style='color:#00f0ff;font-weight:800;'>📈 Sum Trend</h3>",unsafe_allow_html=True)
+    st.markdown("### 📈 Sum Trend")
     td=df.sort_values("date").tail(n_draws).copy()
     td["sum"]=td["numbers"].apply(sum); td["ma5"]=td["sum"].rolling(5).mean()
     fig_t=go.Figure()
@@ -1142,7 +888,7 @@ elif pg=="r":
                         plot_bgcolor="#050d1a",paper_bgcolor="#050d1a")
     st.plotly_chart(fig_t,use_container_width=True)
 
-    st.markdown("<h3 style='color:#00f0ff;font-weight:800;'>🔍 Number Lookup</h3>",unsafe_allow_html=True)
+    st.markdown("### 🔍 Number Lookup")
     lu=st.number_input(f"Enter number (1–{pool})",min_value=1,max_value=pool,value=7)
     ai=df[df["numbers"].apply(lambda x:lu in x)].sort_values("date",ascending=False)
     c1l,c2l,c3l=st.columns(3)
@@ -1155,129 +901,10 @@ elif pg=="r":
                      use_container_width=True,hide_index=True)
 
 # ════════════════════════════════════════════════════════════════════════════════
-# WINNERS
-# ════════════════════════════════════════════════════════════════════════════════
-elif pg=="w":
-    st.markdown("<h2 style='color:#ffd700;font-weight:900;text-shadow:0 0 14px rgba(255,215,0,0.5);'>🏆 Recent Winners</h2>",unsafe_allow_html=True)
-
-    # Game filter
-    game_filter = st.selectbox(
-        "Filter by Game",
-        ["All Games","Lotto Max","Lotto 6/49","Western Max","Western 649","Daily Grand"],
-        key="winner_game_filter"
-    )
-
-    # Fetch button
-    col_btn, col_info = st.columns([2,3])
-    with col_btn:
-        fetch_btn = st.button("🔄 Fetch Latest Winners", use_container_width=True, type="primary")
-    with col_info:
-        if "winners_fetched_at" in st.session_state:
-            st.markdown(
-                f"<p style='color:#6a9abf;font-size:12px;margin-top:14px;'>"
-                f"🟢 Last updated: {st.session_state['winners_fetched_at']}</p>",
-                unsafe_allow_html=True)
-
-    if fetch_btn:
-        with st.spinner("Fetching winner stories from WCLC & OLG..."):
-            if FETCH_AVAILABLE:
-                data, msg = fetch_winners()
-                st.session_state["winners_data"] = data
-                st.session_state["winners_fetched_at"] = datetime.now().strftime("%Y-%m-%d %H:%M")
-                if data:
-                    st.success(f"✅ {msg}")
-                else:
-                    st.warning("⚠️ No winner stories found — sites may have changed layout.")
-            else:
-                st.error("❌ requests/beautifulsoup4 not installed.")
-
-    winners_data = st.session_state.get("winners_data", [])
-
-    if not winners_data:
-        st.markdown(
-            "<div style='background:rgba(0,10,30,0.6);border:1px solid rgba(255,215,0,0.2);"
-            "border-radius:14px;padding:32px;text-align:center;margin-top:20px;'>"
-            "<p style='font-size:40px;'>🏆</p>"
-            "<p style='color:#ffd700;font-size:18px;font-weight:800;'>No winner data yet</p>"
-            "<p style='color:#6a9abf;font-size:14px;'>Tap <b>Fetch Latest Winners</b> to load recent prize winners from WCLC & OLG</p>"
-            "</div>",
-            unsafe_allow_html=True)
-    else:
-        # Filter by game
-        filtered = winners_data
-        if game_filter != "All Games":
-            filtered = [w for w in winners_data if game_filter.lower() in w["game"].lower()]
-
-        if not filtered:
-            st.info(f"No {game_filter} winners found in current data. Try fetching again or select All Games.")
-        else:
-            # Summary counts
-            game_counts = Counter(w["game"] for w in winners_data)
-            cols = st.columns(min(len(game_counts), 5))
-            game_colors = {
-                "Lotto Max":   "#00f0ff",
-                "Lotto 6/49":  "#ffc940",
-                "Western Max": "#ff6b35",
-                "Western 649": "#00ff9d",
-                "Daily Grand": "#d4af37",
-                "Lottery":     "#a080ff",
-            }
-            for i, (game, count) in enumerate(game_counts.most_common(5)):
-                c = game_colors.get(game, "#a080ff")
-                with cols[i % len(cols)]:
-                    st.markdown(
-                        f"<div style='background:rgba(0,10,30,0.5);border:1px solid {c}33;"
-                        f"border-radius:10px;padding:10px;text-align:center;'>"
-                        f"<div style='color:{c};font-size:20px;font-weight:900;'>{count}</div>"
-                        f"<div style='color:{c};font-size:11px;font-weight:700;'>{game}</div>"
-                        f"</div>", unsafe_allow_html=True)
-
-            st.markdown("<div style='height:16px'></div>", unsafe_allow_html=True)
-            st.markdown(
-                f"<p style='color:#a0c4e8;font-weight:700;font-size:15px;'>"
-                f"Showing {len(filtered)} winner{'s' if len(filtered)!=1 else ''}"
-                f"{' for ' + game_filter if game_filter != 'All Games' else ''}</p>",
-                unsafe_allow_html=True)
-
-            # Winner cards
-            for w in filtered:
-                game_c = game_colors.get(w["game"], "#a080ff")
-                source_emoji = "🍁" if w["source"] == "OLG" else "🌾"
-                prize_html = (f"<span style='background:rgba(255,215,0,0.15);color:#ffd700;"
-                              f"border-radius:20px;padding:3px 12px;font-size:12px;"
-                              f"font-weight:800;margin-left:8px;'>"
-                              f"💰 {w['prize']}</span>") if w.get("prize") else ""
-                link_html = (f"<a href='{w['url']}' target='_blank' style='display:inline-block;"
-                             f"margin-top:10px;background:linear-gradient(135deg,{game_c}22,{game_c}11);"
-                             f"border:1px solid {game_c}55;border-radius:8px;padding:6px 14px;"
-                             f"color:{game_c};font-size:12px;font-weight:700;text-decoration:none;'>"
-                             f"📰 Read Full Story →</a>") if w.get("url") else ""
-                st.markdown(
-                    f"<div style='background:linear-gradient(135deg,rgba(0,5,20,0.8),rgba(0,10,35,0.6));"
-                    f"border:1px solid {game_c}33;border-left:4px solid {game_c};"
-                    f"border-radius:12px;padding:16px 20px;margin-bottom:10px;'>"
-                    f"<div style='display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;flex-wrap:wrap;gap:6px;'>"
-                    f"<div style='display:flex;align-items:center;'>"
-                    f"<span style='color:{game_c};font-weight:800;font-size:14px;'>{w['game']}</span>"
-                    f"{prize_html}</div>"
-                    f"<span style='background:{game_c}22;color:{game_c};border-radius:20px;"
-                    f"padding:3px 10px;font-size:11px;font-weight:700;'>"
-                    f"{source_emoji} {w['source']}</span>"
-                    f"</div>"
-                    f"<div style='display:flex;align-items:center;gap:8px;margin-bottom:8px;'>"
-                    f"<span style='color:#ffd700;font-size:13px;'>📍</span>"
-                    f"<span style='color:#ffc940;font-size:13px;font-weight:700;'>{w['location']}</span>"
-                    f"</div>"
-                    f"<p style='color:#c8e0f4;font-size:13px;line-height:1.6;margin:0 0 4px 0;'>{w['story']}</p>"
-                    f"{link_html}"
-                    f"</div>",
-                    unsafe_allow_html=True)
-
-# ════════════════════════════════════════════════════════════════════════════════
 # SCRATCH HUB
 # ════════════════════════════════════════════════════════════════════════════════
 elif pg=="s":
-    st.markdown("<h2 style='color:#00f0ff;font-weight:900;text-shadow:0 0 10px rgba(0,240,255,0.4);'>🎫 Scratch Hub</h2>",unsafe_allow_html=True)
+    st.markdown("## 🎫 Scratch Hub")
     scratch_data=None
     if "scratch_tickets" in st.session_state and st.session_state.scratch_tickets:
         scratch_data=st.session_state.scratch_tickets
@@ -1291,7 +918,7 @@ elif pg=="s":
     else:
         st.info("No scratch data. Go to ⚙️ Settings → 🎫 Update Scratch.")
     st.divider()
-    st.markdown("<h3 style='color:#ffc940;font-weight:800;'>📝 Scratch Ticket Log</h3>",unsafe_allow_html=True)
+    st.markdown("### 📝 Scratch Ticket Log")
     if "scratch_log" not in st.session_state: st.session_state.scratch_log=[]
     with st.form("scratch_form"):
         s_type=st.selectbox("Ticket Type",["$3 Scratch","$5 Scratch","$10 Scratch","$20 Scratch","Instant Win"])
@@ -1317,11 +944,11 @@ elif pg=="s":
 # SETTINGS
 # ════════════════════════════════════════════════════════════════════════════════
 elif pg=="x":
-    st.markdown("<h2 style='color:#00f0ff;font-weight:900;text-shadow:0 0 10px rgba(0,240,255,0.4);'>⚙️ Settings & Data Sync</h2>",unsafe_allow_html=True)
+    st.markdown("## ⚙️ Settings & Data Sync")
     if not FETCH_AVAILABLE:
         st.warning("Install: pip install requests beautifulsoup4 lxml")
     else:
-        su1,su2,su3,su4,su5=st.columns(5)
+        su1,su2,su3,su4=st.columns(4)
         with su1:
             if st.button("🔮 Update Lotto Max",use_container_width=True):
                 with st.spinner("Fetching..."): draws,msg=fetch_lotto_max()
@@ -1354,19 +981,6 @@ elif pg=="x":
                     st.session_state["live_western_max"]=draws; st.session_state["live_western_max_at"]=now
                     save_cache("western_max",draws,now); st.success(f"✅ {msg}")
                 else: st.error(f"❌ {msg}")
-        # ── FIX 2: Daily Grand update button ──
-        with su5:
-            if st.button("👑 Update Daily Grand",use_container_width=True):
-                with st.spinner("Fetching Daily Grand..."):
-                    draws,msg=fetch_daily_grand()
-                if draws:
-                    now=datetime.now().strftime("%Y-%m-%d %H:%M")
-                    st.session_state["live_daily_grand"]=draws
-                    st.session_state["live_daily_grand_at"]=now
-                    save_cache("daily_grand",draws,now)
-                    st.success(f"✅ {msg}")
-                else:
-                    st.error(f"❌ {msg}")
 
         st.markdown("<br>",unsafe_allow_html=True)
         sc1,sc2=st.columns(2)
@@ -1381,8 +995,7 @@ elif pg=="x":
         with sc2:
             if st.button("🗑 Clear All Cache",use_container_width=True):
                 for k in ["live_lotto_max","live_lotto_649","live_western_649","live_western_max",
-                          "live_daily_grand","live_lotto_max_at","live_lotto_649_at",
-                          "live_western_649_at","live_western_max_at","live_daily_grand_at",
+                          "live_lotto_max_at","live_lotto_649_at","live_western_649_at","live_western_max_at",
                           "scratch_tickets","scratch_fetched_at"]:
                     st.session_state.pop(k,None)
                 for fname in [CACHE_FILE,SCRATCH_FILE]:
@@ -1390,7 +1003,7 @@ elif pg=="x":
                 st.success("Cache cleared"); st.rerun()
 
     st.divider()
-    st.markdown("<h3 style='color:#00f0ff;font-weight:800;'>📡 Data Status</h3>",unsafe_allow_html=True)
+    st.markdown("### 📡 Data Status")
     for gk,gv in GAMES.items():
         _raw,_src,_live=get_draws(gk)
         _cnt=len(build_df(_raw,gv["balls"]))
