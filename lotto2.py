@@ -667,14 +667,27 @@ FALLBACK = {
     ],
 }
 
+@st.cache_data(ttl=21600, show_spinner=False)
+def _auto_fetch(game_key):
+    """Auto-fetch live draw data; cached for 6 hours across all sessions."""
+    if not FETCH_AVAILABLE:
+        return FALLBACK[game_key], "BUILT-IN DATA", False
+    try:
+        if game_key == "lotto_max":
+            draws, msg = fetch_lotto_max()
+        elif game_key == "daily_grand":
+            draws, msg = fetch_daily_grand()
+        else:
+            draws, msg = fetch_wclc(game_key)
+        if draws:
+            stamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+            return draws, f"LIVE · {stamp}", True
+    except Exception:
+        pass
+    return FALLBACK[game_key], "BUILT-IN DATA", False
+
 def get_draws(game_key):
-    sess_key=f"live_{game_key}"
-    if sess_key in st.session_state and st.session_state[sess_key]:
-        return st.session_state[sess_key],f"LIVE · {st.session_state.get(sess_key+'_at','')}",True
-    c=load_cache(game_key)
-    if c and c.get("draws"):
-        return [(d[0],d[1],d[2]) for d in c["draws"]],f"CACHED · {c['fetched_at']}",True
-    return FALLBACK[game_key],"BUILT-IN DATA",False
+    return _auto_fetch(game_key)
 
 def build_df(raw,balls):
     rows=[]
@@ -1397,55 +1410,36 @@ elif pg=="s":
 # ════════════════════════════════════════════════════════════════════════════════
 elif pg=="x":
     st.markdown("<h2 style='color:#00f0ff;font-weight:900;text-shadow:0 0 10px rgba(0,240,255,0.4);'>⚙️ Settings & Data Sync</h2>",unsafe_allow_html=True)
+    st.info("✅ Live data loads automatically every 6 hours. Use the buttons below to force an immediate refresh.")
     if not FETCH_AVAILABLE:
         st.warning("Install: pip install requests beautifulsoup4 lxml")
     else:
         su1,su2,su3,su4,su5=st.columns(5)
         with su1:
-            if st.button("🔮 Update Lotto Max",use_container_width=True):
-                with st.spinner("Fetching..."): draws,msg=fetch_lotto_max()
-                if draws:
-                    now=datetime.now().strftime("%Y-%m-%d %H:%M")
-                    st.session_state["live_lotto_max"]=draws; st.session_state["live_lotto_max_at"]=now
-                    save_cache("lotto_max",draws,now); st.success(f"✅ {msg}")
-                else: st.error(f"❌ {msg}")
+            if st.button("🔮 Refresh Lotto Max",use_container_width=True):
+                _auto_fetch.clear()
+                st.success("✅ Cache cleared — reloading live data...")
+                st.rerun()
         with su2:
-            if st.button("6️⃣ Update Lotto 6/49",use_container_width=True):
-                with st.spinner("Fetching..."): draws,msg=fetch_wclc("lotto_649")
-                if draws:
-                    now=datetime.now().strftime("%Y-%m-%d %H:%M")
-                    st.session_state["live_lotto_649"]=draws; st.session_state["live_lotto_649_at"]=now
-                    save_cache("lotto_649",draws,now); st.success(f"✅ {msg}")
-                else: st.error(f"❌ {msg}")
+            if st.button("6️⃣ Refresh Lotto 6/49",use_container_width=True):
+                _auto_fetch.clear()
+                st.success("✅ Cache cleared — reloading live data...")
+                st.rerun()
         with su3:
-            if st.button("🌾 Update Western 649",use_container_width=True):
-                with st.spinner("Fetching..."): draws,msg=fetch_wclc("western_649")
-                if draws:
-                    now=datetime.now().strftime("%Y-%m-%d %H:%M")
-                    st.session_state["live_western_649"]=draws; st.session_state["live_western_649_at"]=now
-                    save_cache("western_649",draws,now); st.success(f"✅ {msg}")
-                else: st.error(f"❌ {msg}")
+            if st.button("🌾 Refresh Western 649",use_container_width=True):
+                _auto_fetch.clear()
+                st.success("✅ Cache cleared — reloading live data...")
+                st.rerun()
         with su4:
-            if st.button("⭐ Update Western Max",use_container_width=True):
-                with st.spinner("Fetching..."): draws,msg=fetch_wclc("western_max")
-                if draws:
-                    now=datetime.now().strftime("%Y-%m-%d %H:%M")
-                    st.session_state["live_western_max"]=draws; st.session_state["live_western_max_at"]=now
-                    save_cache("western_max",draws,now); st.success(f"✅ {msg}")
-                else: st.error(f"❌ {msg}")
-        # ── FIX 2: Daily Grand update button ──
+            if st.button("⭐ Refresh Western Max",use_container_width=True):
+                _auto_fetch.clear()
+                st.success("✅ Cache cleared — reloading live data...")
+                st.rerun()
         with su5:
-            if st.button("👑 Update Daily Grand",use_container_width=True):
-                with st.spinner("Fetching Daily Grand..."):
-                    draws,msg=fetch_daily_grand()
-                if draws:
-                    now=datetime.now().strftime("%Y-%m-%d %H:%M")
-                    st.session_state["live_daily_grand"]=draws
-                    st.session_state["live_daily_grand_at"]=now
-                    save_cache("daily_grand",draws,now)
-                    st.success(f"✅ {msg}")
-                else:
-                    st.error(f"❌ {msg}")
+            if st.button("👑 Refresh Daily Grand",use_container_width=True):
+                _auto_fetch.clear()
+                st.success("✅ Cache cleared — reloading live data...")
+                st.rerun()
 
         st.markdown("<br>",unsafe_allow_html=True)
         sc1,sc2=st.columns(2)
@@ -1458,15 +1452,11 @@ elif pg=="x":
                     save_scratch_cache(tickets,now); st.success(f"✅ {msg}")
                 else: st.error(f"❌ {msg}")
         with sc2:
-            if st.button("🗑 Clear All Cache",use_container_width=True):
-                for k in ["live_lotto_max","live_lotto_649","live_western_649","live_western_max",
-                          "live_daily_grand","live_lotto_max_at","live_lotto_649_at",
-                          "live_western_649_at","live_western_max_at","live_daily_grand_at",
-                          "scratch_tickets","scratch_fetched_at"]:
+            if st.button("🔄 Force Refresh All Games",use_container_width=True):
+                _auto_fetch.clear()
+                for k in ["scratch_tickets","scratch_fetched_at"]:
                     st.session_state.pop(k,None)
-                for fname in [CACHE_FILE,SCRATCH_FILE]:
-                    os.path.exists(fname) and os.remove(fname)
-                st.success("Cache cleared"); st.rerun()
+                st.success("All caches cleared — reloading live data..."); st.rerun()
 
     st.divider()
     st.markdown("<h3 style='color:#00f0ff;font-weight:800;'>📡 Data Status</h3>",unsafe_allow_html=True)
