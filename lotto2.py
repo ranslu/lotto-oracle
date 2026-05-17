@@ -820,23 +820,39 @@ FALLBACK = {
     ],
 }
 
+_GH_RAW = "https://raw.githubusercontent.com/ranslu/lotto-oracle/main/lottery_data.json"
+
 @st.cache_data(ttl=21600, show_spinner=False)
 def _auto_fetch(game_key):
-    """Auto-fetch live draw data; cached for 6 hours across all sessions."""
-    if not FETCH_AVAILABLE:
-        return FALLBACK[game_key], "BUILT-IN DATA", False
+    """Read data from GitHub-committed JSON (updated daily by GitHub Actions)."""
+    # Primary: GitHub raw JSON — updated every night by GitHub Actions workflow
     try:
-        if game_key == "lotto_max":
-            draws, msg = fetch_lotto_max()
-        elif game_key == "daily_grand":
-            draws, msg = fetch_daily_grand()
-        else:
-            draws, msg = fetch_wclc(game_key)
+        resp = requests.get(_GH_RAW, timeout=10)
+        resp.raise_for_status()
+        data = resp.json()
+        entry = data.get(game_key, {})
+        draws = entry.get("draws", [])
         if draws:
-            stamp = datetime.now().strftime("%Y-%m-%d %H:%M")
-            return draws, f"LIVE · {stamp}", True
+            parsed = [(d[0], d[1], d[2]) for d in draws]
+            return parsed, f"LIVE · {entry.get('fetched_at','')}", True
     except Exception:
         pass
+
+    # Fallback: try scrapers directly (may work depending on network)
+    if FETCH_AVAILABLE:
+        try:
+            if game_key == "lotto_max":
+                draws, msg = fetch_lotto_max()
+            elif game_key == "daily_grand":
+                draws, msg = fetch_daily_grand()
+            else:
+                draws, msg = fetch_wclc(game_key)
+            if draws:
+                stamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+                return draws, f"LIVE · {stamp}", True
+        except Exception:
+            pass
+
     return FALLBACK[game_key], "BUILT-IN DATA", False
 
 def get_draws(game_key):
