@@ -6,4 +6,4 @@ requests
 beautifulsoup4
 lxml
 cloudscraper
-httpx[http2]
+curl-cffi

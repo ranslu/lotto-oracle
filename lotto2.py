@@ -13,29 +13,27 @@ try:
     from bs4 import BeautifulSoup
     FETCH_AVAILABLE = True
     try:
+        from curl_cffi import requests as _cffi_req
+        _cffi_session = _cffi_req.Session(impersonate="chrome120")
+    except Exception:
+        _cffi_session = None
+    try:
         import cloudscraper as _cloudscraper_mod
         _scraper = _cloudscraper_mod.create_scraper(browser={"browser":"chrome","platform":"windows","mobile":False})
     except Exception:
         _scraper = None
-    try:
-        import httpx as _httpx
-        _httpx_client = _httpx.Client(http2=True, follow_redirects=True, timeout=20)
-    except Exception:
-        _httpx_client = None
 except ImportError:
     FETCH_AVAILABLE = False
+    _cffi_session = None
     _scraper = None
-    _httpx_client = None
 
 def _fetch_url(url, timeout=20):
-    """Fetch a URL trying httpx/HTTP2 → cloudscraper → requests."""
-    if _httpx_client:
+    """Fetch using curl_cffi (Chrome TLS fingerprint) → cloudscraper → requests."""
+    if _cffi_session:
         try:
-            r = _httpx_client.get(url, headers=HEADERS)
+            r = _cffi_session.get(url, headers=HEADERS, timeout=timeout)
             r.raise_for_status()
-            class _R:
-                def __init__(self,r): self.text=r.text; self.status_code=r.status_code
-            return _R(r)
+            return r
         except Exception:
             pass
     if _scraper:
@@ -229,17 +227,20 @@ def _bs(html):
         except Exception: continue
     return BeautifulSoup(html, "html.parser")
 
-def _fetch_wayback(original_url, days_back=10, timeout=20):
-    """Fetch a recent cached copy from the Wayback Machine — never blocked by lottery sites."""
+def _fetch_wayback(original_url, days_back=30, timeout=25):
+    """Fetch a recent cached copy from Wayback Machine — bypasses all lottery site blocking."""
     from datetime import timedelta
+    # Strip protocol for CDX lookup
+    cdx_url_key = original_url.replace("https://","").replace("http://","")
     from_ts = (datetime.now() - timedelta(days=days_back)).strftime("%Y%m%d")
-    cdx = (f"http://web.archive.org/cdx/search/cdx?url={original_url}"
-           f"&output=json&limit=1&fl=timestamp&filter=statuscode:200&from={from_ts}")
+    cdx = (f"http://web.archive.org/cdx/search/cdx?url={cdx_url_key}"
+           f"&output=json&limit=1&fl=timestamp&filter=statuscode:200&from={from_ts}&to=99991231")
     try:
-        rows = requests.get(cdx, timeout=10).json()
-        if len(rows) < 2: return None
+        cdx_resp = requests.get(cdx, timeout=12)
+        rows = cdx_resp.json()
+        if len(rows) < 2: return None   # no recent snapshot found
         ts = rows[1][0]
-        wb_url = f"https://web.archive.org/web/{ts}/{original_url}"
+        wb_url = f"https://web.archive.org/web/{ts}if_/{original_url}"
         r = requests.get(wb_url, headers=HEADERS, timeout=timeout)
         r.raise_for_status()
         return r
