@@ -31,28 +31,42 @@ def _get(url):
     r.raise_for_status()
     return r
 
+def _parse_lottomaxnumbers(soup):
+    found = []
+    for row in soup.select("table tr"):
+        cells = row.find_all("td")
+        if len(cells) < 2: continue
+        lnk = cells[0].find("a")
+        raw = lnk.get_text(strip=True) if lnk else cells[0].get_text(strip=True)
+        d = _date(raw)
+        if not d: continue
+        nums, bonus = [], 0
+        for i, li in enumerate(cells[1].find_all("li")):
+            t = li.get_text(strip=True)
+            if not t.isdigit(): continue
+            if i < 7: nums.append(int(t))
+            else: bonus = int(t)
+        if len(nums) == 7:
+            found.append([d, sorted(nums), bonus])
+    return found
+
 def fetch_lotto_max():
-    draws = []
-    try:
-        soup = _bs(_get("https://www.lottomaxnumbers.com/past-numbers").text)
-        for row in soup.select("table tr"):
-            cells = row.find_all("td")
-            if len(cells) < 2: continue
-            lnk = cells[0].find("a")
-            if not lnk: continue
-            d = _date(lnk.get_text(strip=True))
-            if not d: continue
-            nums, bonus = [], 0
-            for i, li in enumerate(cells[1].find_all("li")):
-                t = li.get_text(strip=True)
-                if not t.isdigit(): continue
-                if i < 7: nums.append(int(t))
-                else: bonus = int(t)
-            if len(nums) == 7:
-                draws.append([d, sorted(nums), bonus])
-    except Exception as e:
-        print(f"  lotto_max error: {e}")
-    return draws
+    sources = [
+        "https://www.lottomaxnumbers.com/past-numbers",
+        "https://ca.lottonumbers.com/lotto-max/past-numbers",
+        "https://www.lotterycanada.com/lotto-max",
+    ]
+    for url in sources:
+        try:
+            print(f"  trying {url}")
+            soup = _bs(_get(url).text)
+            draws = _parse_lottomaxnumbers(soup)
+            if draws:
+                print(f"  got {len(draws)} draws from {url}")
+                return draws
+        except Exception as e:
+            print(f"  {url} failed: {e}")
+    return []
 
 def fetch_wclc(game_key):
     ball_count = {"lotto_649": 6, "western_649": 6, "western_max": 7}[game_key]
