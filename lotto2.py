@@ -227,25 +227,27 @@ def _bs(html):
         except Exception: continue
     return BeautifulSoup(html, "html.parser")
 
-def _fetch_wayback(original_url, days_back=30, timeout=25):
-    """Fetch a recent cached copy from Wayback Machine — bypasses all lottery site blocking."""
-    from datetime import timedelta
-    # Strip protocol for CDX lookup
-    cdx_url_key = original_url.replace("https://","").replace("http://","")
-    from_ts = (datetime.now() - timedelta(days=days_back)).strftime("%Y%m%d")
-    cdx = (f"http://web.archive.org/cdx/search/cdx?url={cdx_url_key}"
-           f"&output=json&limit=1&fl=timestamp&filter=statuscode:200&from={from_ts}&to=99991231")
+def _fetch_wayback(original_url, timeout=25):
+    """Fetch the most recent cached copy from Wayback Machine — not blocked by lottery sites."""
+    clean = original_url.replace("https://","").replace("http://","")
+    # Get most recent 200 snapshot from 2026 onward
+    cdx = (f"http://web.archive.org/cdx/search/cdx?url={clean}"
+           f"&output=json&limit=1&fl=timestamp&filter=statuscode:200"
+           f"&from=20260101&to=99991231")
     try:
-        cdx_resp = requests.get(cdx, timeout=12)
-        rows = cdx_resp.json()
-        if len(rows) < 2: return None   # no recent snapshot found
+        rows = requests.get(cdx, timeout=15).json()
+        if len(rows) < 2:
+            # Widen search to 2025
+            cdx2 = cdx.replace("from=20260101","from=20251001")
+            rows = requests.get(cdx2, timeout=15).json()
+        if len(rows) < 2: return None
         ts = rows[1][0]
         wb_url = f"https://web.archive.org/web/{ts}if_/{original_url}"
         r = requests.get(wb_url, headers=HEADERS, timeout=timeout)
-        r.raise_for_status()
-        return r
+        if r.status_code == 200: return r
     except Exception:
-        return None
+        pass
+    return None
 
 def _extract_numbers_generic(soup, balls, pool):
     """Generic number extraction: find date+number clusters anywhere in the page."""
@@ -268,113 +270,44 @@ def fetch_lotto_max():
     import re
     draws = []
 
-    # Source 1: lottery.ca (cloud-friendly, no Cloudflare)
-    try:
-        resp = _fetch_url("https://lottery.ca/lotto-max")
-        resp.raise_for_status()
-        soup = _bs(resp.text)
-        for row in soup.select("tr, .result-row, .draw-row, [class*='result'], [class*='draw']"):
-            cells = row.find_all(["td","div","span"])
-            txt = row.get_text(" ", strip=True)
-            draw_date = None
-            for seg in txt.split():
-                d = _parse_date_multi(seg)
-                if d: draw_date = d; break
-            if not draw_date:
-                m = re.search(r'(\w+ \d+,? \d{4})', txt)
-                if m: draw_date = _parse_date_multi(m.group(1))
+    def _parse_lottomaxnumbers(soup):
+        found = []
+        for row in soup.select("table tr"):
+            cells = row.find_all("td")
+            if len(cells) < 2: continue
+            lnk = cells[0].find("a")
+            raw = lnk.get_text(strip=True) if lnk else cells[0].get_text(strip=True)
+            draw_date = _parse_date_multi(raw)
             if not draw_date: continue
-            nums = [int(x) for x in re.findall(r'\b(\d{1,2})\b', txt) if 1 <= int(x) <= 52]
-            if len(nums) >= 7:
-                main = sorted(list(dict.fromkeys(nums))[:7])
-                if len(main) == 7:
-                    draws.append((draw_date, main, 0))
-        if not draws:
-            draws = _extract_numbers_generic(soup, 7, 52)
-    except Exception: pass
+            nums, bonus = [], 0
+            for i, li in enumerate(cells[1].find_all("li")):
+                t = li.get_text(strip=True)
+                if not t.isdigit(): continue
+                if i < 7: nums.append(int(t))
+                else: bonus = int(t)
+            if len(nums) == 7: found.append((draw_date, sorted(nums), bonus))
+        return found
 
-    # Source 2: ca.lottonumbers.com
-    if not draws:
-        try:
-            resp = _fetch_url("https://ca.lottonumbers.com/lotto-max/past-numbers")
-            resp.raise_for_status()
-            soup = _bs(resp.text)
-            for row in soup.select("table tr"):
-                cells = row.find_all("td")
-                if len(cells) < 2: continue
-                draw_date = _parse_date_multi(cells[0].get_text(strip=True))
-                if not draw_date: continue
-                nums = [int(li.get_text(strip=True)) for li in cells[1].find_all("li") if li.get_text(strip=True).isdigit()]
-                bonus = 0
-                if len(cells) > 2:
-                    bt = cells[2].get_text(strip=True)
-                    if bt.isdigit(): bonus = int(bt)
-                if len(nums) == 7:
-                    draws.append((draw_date, sorted(nums), bonus))
-        except Exception: pass
-
-    # Source 2: lottomaxnumbers.com
-    if not draws:
-        try:
-            resp = _fetch_url("https://www.lottomaxnumbers.com/past-numbers")
-            resp.raise_for_status()
-            soup = _bs(resp.text)
-            for row in soup.select("table tr"):
-                cells = row.find_all("td")
-                if len(cells) < 2: continue
-                lnk = cells[0].find("a")
-                if not lnk: continue
-                draw_date = _parse_date_multi(lnk.get_text(strip=True))
-                if not draw_date: continue
-                nums, bonus = [], None
-                for i, li in enumerate(cells[1].find_all("li")):
-                    t = li.get_text(strip=True)
-                    if not t.isdigit(): continue
-                    if i < 7: nums.append(int(t))
-                    else: bonus = int(t)
-                if len(nums) == 7 and bonus is not None:
-                    draws.append((draw_date, sorted(nums), bonus))
-        except Exception: pass
-
-    # Source 3: lotteryextreme.com
-    if not draws:
-        try:
-            resp = _fetch_url("https://www.lotteryextreme.com/canada/lotto_max-winning_numbers")
-            resp.raise_for_status()
-            import re
-            soup = _bs(resp.text)
-            for td in soup.find_all("td"):
-                txt = td.get_text(" ", strip=True)
-                m = re.search(r"\((\d{4}-\d{2}-\d{2})", txt)
-                if m:
-                    draw_date = m.group(1)
-                    lis = td.find_all("li")
-                    nums = [int(li.get_text(strip=True)) for li in lis if li.get_text(strip=True).isdigit()]
-                    if len(nums) >= 7:
-                        draws.append((draw_date, sorted(nums[:7]), nums[7] if len(nums) > 7 else 0))
-        except Exception: pass
-
-    # Wayback Machine fallback — never blocked, caches lottery pages regularly
-    if not draws:
-        for wb_url in ["https://www.lottomaxnumbers.com/past-numbers",
-                       "https://ca.lottonumbers.com/lotto-max/past-numbers"]:
-            resp = _fetch_wayback(wb_url)
-            if not resp: continue
-            soup = _bs(resp.text)
-            for row in soup.select("table tr"):
-                cells = row.find_all("td")
-                if len(cells) < 2: continue
-                lnk = cells[0].find("a")
-                raw_txt = lnk.get_text(strip=True) if lnk else cells[0].get_text(strip=True)
-                draw_date = _parse_date_multi(raw_txt)
-                if not draw_date: continue
-                nums = [int(li.get_text(strip=True)) for li in cells[1].find_all("li") if li.get_text(strip=True).isdigit()]
-                bonus = 0
-                if len(cells) > 2:
-                    bt = cells[2].get_text(strip=True)
-                    if bt.isdigit(): bonus = int(bt)
-                if len(nums) == 7: draws.append((draw_date, sorted(nums), bonus))
+    # Primary: Wayback Machine (archive.org never blocks cloud IPs)
+    for wb_target in ["https://www.lottomaxnumbers.com/past-numbers",
+                      "https://ca.lottonumbers.com/lotto-max/past-numbers"]:
+        resp = _fetch_wayback(wb_target)
+        if resp:
+            draws = _parse_lottomaxnumbers(_bs(resp.text))
             if draws: break
+
+    # Fallback: direct fetch via curl_cffi (Chrome TLS fingerprint)
+    if not draws:
+        for url in ["https://www.lottomaxnumbers.com/past-numbers",
+                    "https://www.lotteryextreme.com/canada/lotto_max-winning_numbers"]:
+            try:
+                resp = _fetch_url(url)
+                resp.raise_for_status()
+                soup = _bs(resp.text)
+                draws = _parse_lottomaxnumbers(soup)
+                if not draws: draws = _extract_numbers_generic(soup, 7, 52)
+                if draws: break
+            except Exception: pass
 
     if not draws: return [], "No data found"
     seen = set(); clean = []
@@ -387,109 +320,59 @@ def fetch_wclc(game_key):
     import re
     ball_count = GAMES[game_key]["balls"]
     draws = []
-    pool = GAMES[game_key]["pool"]
+    slug_map = {"lotto_649":"lotto-649","western_649":"western-649","western_max":"western-max"}
+    wclc_base = {
+        "lotto_649":  "https://www.wclc.com/winning-numbers/lotto-649-extra.htm",
+        "western_649":"https://www.wclc.com/winning-numbers/western-649-extra.htm",
+        "western_max":"https://www.wclc.com/winning-numbers/western-max-extra.htm",
+    }
 
-    # Source 1: lottery.ca (cloud-friendly, no Cloudflare)
-    lca_slug = {"lotto_649":"lotto-649","western_649":"western-649","western_max":"western-max"}
-    try:
-        resp = _fetch_url(f"https://lottery.ca/{lca_slug[game_key]}")
-        resp.raise_for_status()
-        soup = _bs(resp.text)
-        for row in soup.select("tr, .result-row, .draw-row, [class*='result'], [class*='draw']"):
-            txt = row.get_text(" ", strip=True)
-            draw_date = None
-            m = re.search(r'(\w+ \d+,? \d{4}|\d{4}-\d{2}-\d{2})', txt)
-            if m: draw_date = _parse_date_multi(m.group(1))
+    def _parse_wclc(soup):
+        found = []
+        for strong in soup.find_all("strong"):
+            draw_date = _parse_date_multi(strong.get_text(strip=True))
             if not draw_date: continue
-            nums = [int(x) for x in re.findall(r'\b(\d{1,2})\b', txt) if 1 <= int(x) <= pool]
-            if len(nums) >= ball_count:
-                main = sorted(list(dict.fromkeys(nums))[:ball_count])
-                if len(main) == ball_count:
-                    draws.append((draw_date, main, 0))
-        if not draws:
-            draws = _extract_numbers_generic(soup, ball_count, pool)
-    except Exception: pass
+            ul = strong.find_next("ul")
+            if not ul: continue
+            items = [li.get_text(strip=True) for li in ul.find_all("li") if li.get_text(strip=True).isdigit()]
+            if len(items) < ball_count: continue
+            nums = sorted([int(x) for x in items[:ball_count]])
+            bonus = int(items[ball_count]) if len(items) > ball_count else 0
+            found.append((draw_date, nums, bonus))
+        return found
 
-    # Source 2: ca.lottonumbers.com
-    if not draws:
-        slug_map = {"lotto_649": "lotto-649", "western_649": "western-649", "western_max": "western-max"}
-        try:
-            url = f"https://ca.lottonumbers.com/{slug_map[game_key]}/past-numbers"
-            resp = _fetch_url(url)
-            resp.raise_for_status()
-            soup = _bs(resp.text)
-            for row in soup.select("table tr"):
-                cells = row.find_all("td")
-                if len(cells) < 2: continue
-                draw_date = _parse_date_multi(cells[0].get_text(strip=True))
-                if not draw_date: continue
-                nums = [int(li.get_text(strip=True)) for li in cells[1].find_all("li") if li.get_text(strip=True).isdigit()]
-                bonus = 0
-                if len(cells) > 2:
-                    bt = cells[2].get_text(strip=True)
-                    if bt.isdigit(): bonus = int(bt)
-                if len(nums) == ball_count:
-                    draws.append((draw_date, sorted(nums), bonus))
-        except Exception: pass
+    def _parse_table(soup):
+        found = []
+        for row in soup.select("table tr"):
+            cells = row.find_all("td")
+            if len(cells) < 2: continue
+            draw_date = _parse_date_multi(cells[0].get_text(strip=True))
+            if not draw_date: continue
+            nums = [int(li.get_text(strip=True)) for li in cells[1].find_all("li")
+                    if li.get_text(strip=True).isdigit()]
+            if len(nums) == ball_count: found.append((draw_date, sorted(nums), 0))
+        return found
 
-    # Source 2: wclc.com print pages
-    if not draws:
-        wclc_urls = {
-            "lotto_649":  "https://www.wclc.com/winning-numbers/lotto-649-extra.htm?channel=print&printMode=true&printFile=/lotto-649-extra.htm",
-            "western_649":"https://www.wclc.com/winning-numbers/western-649-extra.htm?channel=print&printMode=true&printFile=/western-649-extra.htm",
-            "western_max":"https://www.wclc.com/winning-numbers/western-max-extra.htm?channel=print&printMode=true&printFile=/western-max-extra.htm",
-        }
-        try:
-            resp = _fetch_url(wclc_urls[game_key])
-            resp.raise_for_status()
+    # Primary: Wayback Machine
+    for wb_target in [wclc_base[game_key],
+                      f"https://ca.lottonumbers.com/{slug_map[game_key]}/past-numbers"]:
+        resp = _fetch_wayback(wb_target)
+        if resp:
             soup = _bs(resp.text)
-            for strong in soup.find_all("strong"):
-                txt = strong.get_text(strip=True)
-                draw_date = _parse_date_multi(txt)
-                if not draw_date: continue
-                ul = strong.find_next("ul")
-                if not ul: continue
-                items = [li.get_text(strip=True) for li in ul.find_all("li") if li.get_text(strip=True).isdigit()]
-                if len(items) < ball_count: continue
-                nums = sorted([int(x) for x in items[:ball_count]])
-                bonus = int(items[ball_count]) if len(items) > ball_count else 0
-                draws.append((draw_date, nums, bonus))
-        except Exception: pass
-
-    # Wayback Machine fallback
-    if not draws:
-        wclc_wb = {
-            "lotto_649":  "https://www.wclc.com/winning-numbers/lotto-649-extra.htm",
-            "western_649":"https://www.wclc.com/winning-numbers/western-649-extra.htm",
-            "western_max":"https://www.wclc.com/winning-numbers/western-max-extra.htm",
-        }
-        wb_urls = [wclc_wb[game_key],
-                   f"https://ca.lottonumbers.com/{slug_map[game_key]}/past-numbers"]
-        for wb_url in wb_urls:
-            resp = _fetch_wayback(wb_url)
-            if not resp: continue
-            soup = _bs(resp.text)
-            for strong in soup.find_all("strong"):
-                txt = strong.get_text(strip=True)
-                draw_date = _parse_date_multi(txt)
-                if not draw_date: continue
-                ul = strong.find_next("ul")
-                if not ul: continue
-                items = [li.get_text(strip=True) for li in ul.find_all("li") if li.get_text(strip=True).isdigit()]
-                if len(items) < ball_count: continue
-                nums = sorted([int(x) for x in items[:ball_count]])
-                bonus = int(items[ball_count]) if len(items) > ball_count else 0
-                draws.append((draw_date, nums, bonus))
-            if not draws:
-                for row in soup.select("table tr"):
-                    cells = row.find_all("td")
-                    if len(cells) < 2: continue
-                    draw_date = _parse_date_multi(cells[0].get_text(strip=True))
-                    if not draw_date: continue
-                    nums = [int(li.get_text(strip=True)) for li in cells[1].find_all("li") if li.get_text(strip=True).isdigit()]
-                    if len(nums) == ball_count:
-                        draws.append((draw_date, sorted(nums), 0))
+            draws = _parse_wclc(soup) or _parse_table(soup)
             if draws: break
+
+    # Fallback: direct via curl_cffi
+    if not draws:
+        print_url = wclc_base[game_key] + "?channel=print&printMode=true&printFile=/" + wclc_base[game_key].split("/")[-1]
+        for url in [print_url, wclc_base[game_key]]:
+            try:
+                resp = _fetch_url(url)
+                resp.raise_for_status()
+                soup = _bs(resp.text)
+                draws = _parse_wclc(soup) or _parse_table(soup)
+                if draws: break
+            except Exception: pass
 
     if not draws: return [], f"No draws found for {game_key}"
     seen = set(); clean = []
@@ -1770,28 +1653,28 @@ elif pg=="x":
     st.markdown("<h3 style='color:#ffc940;font-weight:800;'>🔍 Fetch Diagnostics</h3>",unsafe_allow_html=True)
     st.caption("Run this to see exactly which URLs succeed or fail — helps fix live data issues.")
     if st.button("🧪 Run Diagnostics",use_container_width=True):
-        diag_sources = {
-            "Lotto Max": [
-                ("lottery.ca","https://lottery.ca/lotto-max"),
-                ("ca.lottonumbers.com","https://ca.lottonumbers.com/lotto-max/past-numbers"),
-                ("lottomaxnumbers.com","https://www.lottomaxnumbers.com/past-numbers"),
-            ],
-            "Lotto 6/49": [
-                ("lottery.ca","https://lottery.ca/lotto-649"),
-                ("ca.lottonumbers.com","https://ca.lottonumbers.com/lotto-649/past-numbers"),
-            ],
-            "Western 649": [
-                ("lottery.ca","https://lottery.ca/western-649"),
-                ("ca.lottonumbers.com","https://ca.lottonumbers.com/western-649/past-numbers"),
-            ],
-        }
-        for game_name, sources in diag_sources.items():
-            st.markdown(f"**{game_name}**")
-            for name, url in sources:
+        import re as _re
+        diag_sources = [
+            ("Wayback: lottomaxnumbers.com", None, "https://www.lottomaxnumbers.com/past-numbers", "wayback"),
+            ("Wayback: wclc 649",            None, "https://www.wclc.com/winning-numbers/lotto-649-extra.htm", "wayback"),
+            ("Direct: lottomaxnumbers.com",  None, "https://www.lottomaxnumbers.com/past-numbers", "direct"),
+            ("Direct: wclc 649 print",       None, "https://www.wclc.com/winning-numbers/lotto-649-extra.htm?channel=print&printMode=true&printFile=/lotto-649-extra.htm", "direct"),
+            ("Direct: lotteryextreme max",   None, "https://www.lotteryextreme.com/canada/lotto_max-winning_numbers", "direct"),
+        ]
+        for label, _, url, mode in diag_sources:
+            if mode == "wayback":
+                with st.spinner(f"Testing {label}..."):
+                    resp = _fetch_wayback(url)
+                if resp:
+                    preview = resp.text[:400]
+                    dates = _re.findall(r'\d{4}-\d{2}-\d{2}|\w+ \d+,? \d{4}', preview)
+                    st.success(f"✅ {label} — {len(resp.text):,} bytes · dates: {dates[:4]}")
+                else:
+                    st.error(f"❌ {label} — No snapshot found in Wayback Machine")
+            else:
                 status, nbytes, preview, err = _fetch_debug(url)
                 if err:
-                    st.error(f"❌ {name} — {err}")
+                    st.error(f"❌ {label} — {err[:120]}")
                 else:
-                    import re as _re
                     dates = _re.findall(r'\d{4}-\d{2}-\d{2}|\w+ \d+,? \d{4}', preview)
-                    st.success(f"✅ {name} — HTTP {status} · {nbytes:,} bytes · dates in preview: {dates[:3]}")
+                    st.success(f"✅ {label} — HTTP {status} · {nbytes:,} bytes · dates: {dates[:4]}")
