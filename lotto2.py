@@ -229,6 +229,23 @@ def _bs(html):
         except Exception: continue
     return BeautifulSoup(html, "html.parser")
 
+def _fetch_wayback(original_url, days_back=10, timeout=20):
+    """Fetch a recent cached copy from the Wayback Machine — never blocked by lottery sites."""
+    from datetime import timedelta
+    from_ts = (datetime.now() - timedelta(days=days_back)).strftime("%Y%m%d")
+    cdx = (f"http://web.archive.org/cdx/search/cdx?url={original_url}"
+           f"&output=json&limit=1&fl=timestamp&filter=statuscode:200&from={from_ts}")
+    try:
+        rows = requests.get(cdx, timeout=10).json()
+        if len(rows) < 2: return None
+        ts = rows[1][0]
+        wb_url = f"https://web.archive.org/web/{ts}/{original_url}"
+        r = requests.get(wb_url, headers=HEADERS, timeout=timeout)
+        r.raise_for_status()
+        return r
+    except Exception:
+        return None
+
 def _extract_numbers_generic(soup, balls, pool):
     """Generic number extraction: find date+number clusters anywhere in the page."""
     import re
@@ -336,6 +353,28 @@ def fetch_lotto_max():
                         draws.append((draw_date, sorted(nums[:7]), nums[7] if len(nums) > 7 else 0))
         except Exception: pass
 
+    # Wayback Machine fallback — never blocked, caches lottery pages regularly
+    if not draws:
+        for wb_url in ["https://www.lottomaxnumbers.com/past-numbers",
+                       "https://ca.lottonumbers.com/lotto-max/past-numbers"]:
+            resp = _fetch_wayback(wb_url)
+            if not resp: continue
+            soup = _bs(resp.text)
+            for row in soup.select("table tr"):
+                cells = row.find_all("td")
+                if len(cells) < 2: continue
+                lnk = cells[0].find("a")
+                raw_txt = lnk.get_text(strip=True) if lnk else cells[0].get_text(strip=True)
+                draw_date = _parse_date_multi(raw_txt)
+                if not draw_date: continue
+                nums = [int(li.get_text(strip=True)) for li in cells[1].find_all("li") if li.get_text(strip=True).isdigit()]
+                bonus = 0
+                if len(cells) > 2:
+                    bt = cells[2].get_text(strip=True)
+                    if bt.isdigit(): bonus = int(bt)
+                if len(nums) == 7: draws.append((draw_date, sorted(nums), bonus))
+            if draws: break
+
     if not draws: return [], "No data found"
     seen = set(); clean = []
     for d in draws:
@@ -415,6 +454,41 @@ def fetch_wclc(game_key):
                 bonus = int(items[ball_count]) if len(items) > ball_count else 0
                 draws.append((draw_date, nums, bonus))
         except Exception: pass
+
+    # Wayback Machine fallback
+    if not draws:
+        wclc_wb = {
+            "lotto_649":  "https://www.wclc.com/winning-numbers/lotto-649-extra.htm",
+            "western_649":"https://www.wclc.com/winning-numbers/western-649-extra.htm",
+            "western_max":"https://www.wclc.com/winning-numbers/western-max-extra.htm",
+        }
+        wb_urls = [wclc_wb[game_key],
+                   f"https://ca.lottonumbers.com/{slug_map[game_key]}/past-numbers"]
+        for wb_url in wb_urls:
+            resp = _fetch_wayback(wb_url)
+            if not resp: continue
+            soup = _bs(resp.text)
+            for strong in soup.find_all("strong"):
+                txt = strong.get_text(strip=True)
+                draw_date = _parse_date_multi(txt)
+                if not draw_date: continue
+                ul = strong.find_next("ul")
+                if not ul: continue
+                items = [li.get_text(strip=True) for li in ul.find_all("li") if li.get_text(strip=True).isdigit()]
+                if len(items) < ball_count: continue
+                nums = sorted([int(x) for x in items[:ball_count]])
+                bonus = int(items[ball_count]) if len(items) > ball_count else 0
+                draws.append((draw_date, nums, bonus))
+            if not draws:
+                for row in soup.select("table tr"):
+                    cells = row.find_all("td")
+                    if len(cells) < 2: continue
+                    draw_date = _parse_date_multi(cells[0].get_text(strip=True))
+                    if not draw_date: continue
+                    nums = [int(li.get_text(strip=True)) for li in cells[1].find_all("li") if li.get_text(strip=True).isdigit()]
+                    if len(nums) == ball_count:
+                        draws.append((draw_date, sorted(nums), 0))
+            if draws: break
 
     if not draws: return [], f"No draws found for {game_key}"
     seen = set(); clean = []
