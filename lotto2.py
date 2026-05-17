@@ -17,12 +17,27 @@ try:
         _scraper = _cloudscraper_mod.create_scraper(browser={"browser":"chrome","platform":"windows","mobile":False})
     except Exception:
         _scraper = None
+    try:
+        import httpx as _httpx
+        _httpx_client = _httpx.Client(http2=True, follow_redirects=True, timeout=20)
+    except Exception:
+        _httpx_client = None
 except ImportError:
     FETCH_AVAILABLE = False
     _scraper = None
+    _httpx_client = None
 
 def _fetch_url(url, timeout=20):
-    """Fetch a URL, using cloudscraper to bypass Cloudflare if available."""
+    """Fetch a URL trying httpx/HTTP2 → cloudscraper → requests."""
+    if _httpx_client:
+        try:
+            r = _httpx_client.get(url, headers=HEADERS)
+            r.raise_for_status()
+            class _R:
+                def __init__(self,r): self.text=r.text; self.status_code=r.status_code
+            return _R(r)
+        except Exception:
+            pass
     if _scraper:
         try:
             r = _scraper.get(url, headers=HEADERS, timeout=timeout)
@@ -31,6 +46,15 @@ def _fetch_url(url, timeout=20):
         except Exception:
             pass
     return requests.get(url, headers=HEADERS, timeout=timeout)
+
+def _fetch_debug(url):
+    """Fetch and return (status, bytes, preview, error)."""
+    try:
+        r = _fetch_url(url)
+        preview = r.text[:300].replace("\n"," ")
+        return r.status_code, len(r.text), preview, None
+    except Exception as e:
+        return None, 0, "", str(e)
 
 st.set_page_config(page_title="LOTTO ORACLE", page_icon="🔮", layout="wide")
 
@@ -205,27 +229,71 @@ def _bs(html):
         except Exception: continue
     return BeautifulSoup(html, "html.parser")
 
+def _extract_numbers_generic(soup, balls, pool):
+    """Generic number extraction: find date+number clusters anywhere in the page."""
+    import re
+    draws = []
+    text = soup.get_text(" ")
+    # Find all ISO dates and nearby number sequences
+    for m in re.finditer(r'(\d{4}-\d{2}-\d{2})', text):
+        date_str = m.group(1)
+        window = text[m.start():m.start()+200]
+        nums = [int(x) for x in re.findall(r'\b(\d{1,2})\b', window) if 1 <= int(x) <= pool]
+        if len(nums) >= balls:
+            main = sorted(list(dict.fromkeys(nums[:balls])))
+            if len(main) == balls:
+                bonus = nums[balls] if len(nums) > balls else 0
+                draws.append((date_str, main, bonus))
+    return draws
+
 def fetch_lotto_max():
+    import re
     draws = []
 
-    # Source 1: ca.lottonumbers.com
+    # Source 1: lottery.ca (cloud-friendly, no Cloudflare)
     try:
-        resp = _fetch_url("https://ca.lottonumbers.com/lotto-max/past-numbers")
+        resp = _fetch_url("https://lottery.ca/lotto-max")
         resp.raise_for_status()
         soup = _bs(resp.text)
-        for row in soup.select("table tr"):
-            cells = row.find_all("td")
-            if len(cells) < 2: continue
-            draw_date = _parse_date_multi(cells[0].get_text(strip=True))
+        for row in soup.select("tr, .result-row, .draw-row, [class*='result'], [class*='draw']"):
+            cells = row.find_all(["td","div","span"])
+            txt = row.get_text(" ", strip=True)
+            draw_date = None
+            for seg in txt.split():
+                d = _parse_date_multi(seg)
+                if d: draw_date = d; break
+            if not draw_date:
+                m = re.search(r'(\w+ \d+,? \d{4})', txt)
+                if m: draw_date = _parse_date_multi(m.group(1))
             if not draw_date: continue
-            nums = [int(li.get_text(strip=True)) for li in cells[1].find_all("li") if li.get_text(strip=True).isdigit()]
-            bonus = 0
-            if len(cells) > 2:
-                bt = cells[2].get_text(strip=True)
-                if bt.isdigit(): bonus = int(bt)
-            if len(nums) == 7:
-                draws.append((draw_date, sorted(nums), bonus))
+            nums = [int(x) for x in re.findall(r'\b(\d{1,2})\b', txt) if 1 <= int(x) <= 52]
+            if len(nums) >= 7:
+                main = sorted(list(dict.fromkeys(nums))[:7])
+                if len(main) == 7:
+                    draws.append((draw_date, main, 0))
+        if not draws:
+            draws = _extract_numbers_generic(soup, 7, 52)
     except Exception: pass
+
+    # Source 2: ca.lottonumbers.com
+    if not draws:
+        try:
+            resp = _fetch_url("https://ca.lottonumbers.com/lotto-max/past-numbers")
+            resp.raise_for_status()
+            soup = _bs(resp.text)
+            for row in soup.select("table tr"):
+                cells = row.find_all("td")
+                if len(cells) < 2: continue
+                draw_date = _parse_date_multi(cells[0].get_text(strip=True))
+                if not draw_date: continue
+                nums = [int(li.get_text(strip=True)) for li in cells[1].find_all("li") if li.get_text(strip=True).isdigit()]
+                bonus = 0
+                if len(cells) > 2:
+                    bt = cells[2].get_text(strip=True)
+                    if bt.isdigit(): bonus = int(bt)
+                if len(nums) == 7:
+                    draws.append((draw_date, sorted(nums), bonus))
+        except Exception: pass
 
     # Source 2: lottomaxnumbers.com
     if not draws:
@@ -279,27 +347,50 @@ def fetch_wclc(game_key):
     import re
     ball_count = GAMES[game_key]["balls"]
     draws = []
+    pool = GAMES[game_key]["pool"]
 
-    # Source 1: ca.lottonumbers.com (cloud-friendly)
-    slug_map = {"lotto_649": "lotto-649", "western_649": "western-649", "western_max": "western-max"}
+    # Source 1: lottery.ca (cloud-friendly, no Cloudflare)
+    lca_slug = {"lotto_649":"lotto-649","western_649":"western-649","western_max":"western-max"}
     try:
-        url = f"https://ca.lottonumbers.com/{slug_map[game_key]}/past-numbers"
-        resp = _fetch_url(url)
+        resp = _fetch_url(f"https://lottery.ca/{lca_slug[game_key]}")
         resp.raise_for_status()
         soup = _bs(resp.text)
-        for row in soup.select("table tr"):
-            cells = row.find_all("td")
-            if len(cells) < 2: continue
-            draw_date = _parse_date_multi(cells[0].get_text(strip=True))
+        for row in soup.select("tr, .result-row, .draw-row, [class*='result'], [class*='draw']"):
+            txt = row.get_text(" ", strip=True)
+            draw_date = None
+            m = re.search(r'(\w+ \d+,? \d{4}|\d{4}-\d{2}-\d{2})', txt)
+            if m: draw_date = _parse_date_multi(m.group(1))
             if not draw_date: continue
-            nums = [int(li.get_text(strip=True)) for li in cells[1].find_all("li") if li.get_text(strip=True).isdigit()]
-            bonus = 0
-            if len(cells) > 2:
-                bt = cells[2].get_text(strip=True)
-                if bt.isdigit(): bonus = int(bt)
-            if len(nums) == ball_count:
-                draws.append((draw_date, sorted(nums), bonus))
+            nums = [int(x) for x in re.findall(r'\b(\d{1,2})\b', txt) if 1 <= int(x) <= pool]
+            if len(nums) >= ball_count:
+                main = sorted(list(dict.fromkeys(nums))[:ball_count])
+                if len(main) == ball_count:
+                    draws.append((draw_date, main, 0))
+        if not draws:
+            draws = _extract_numbers_generic(soup, ball_count, pool)
     except Exception: pass
+
+    # Source 2: ca.lottonumbers.com
+    if not draws:
+        slug_map = {"lotto_649": "lotto-649", "western_649": "western-649", "western_max": "western-max"}
+        try:
+            url = f"https://ca.lottonumbers.com/{slug_map[game_key]}/past-numbers"
+            resp = _fetch_url(url)
+            resp.raise_for_status()
+            soup = _bs(resp.text)
+            for row in soup.select("table tr"):
+                cells = row.find_all("td")
+                if len(cells) < 2: continue
+                draw_date = _parse_date_multi(cells[0].get_text(strip=True))
+                if not draw_date: continue
+                nums = [int(li.get_text(strip=True)) for li in cells[1].find_all("li") if li.get_text(strip=True).isdigit()]
+                bonus = 0
+                if len(cells) > 2:
+                    bt = cells[2].get_text(strip=True)
+                    if bt.isdigit(): bonus = int(bt)
+                if len(nums) == ball_count:
+                    draws.append((draw_date, sorted(nums), bonus))
+        except Exception: pass
 
     # Source 2: wclc.com print pages
     if not draws:
@@ -1597,5 +1688,35 @@ elif pg=="x":
             f"<div style='background:rgba(0,10,30,0.4);border-left:3px solid {color};"
             f"border-radius:6px;padding:8px 14px;margin:4px 0;'>"
             f"<span style='color:{color};font-weight:700;'>{gv['emoji']} {gv['name']}</span>"
-            f" — {'🟢 LIVE' if _live else '🟡 BUILT-IN'} · <span style='color:#6a9abf;'>{_cnt} draws · {_src}</span>"
+            f" — {'🟢 LIVE' if _live else '🟡 BUILT-IN'} · <span style='color:#ffe44d;'>{_cnt} draws · {_src}</span>"
             f"</div>",unsafe_allow_html=True)
+
+    st.divider()
+    st.markdown("<h3 style='color:#ffc940;font-weight:800;'>🔍 Fetch Diagnostics</h3>",unsafe_allow_html=True)
+    st.caption("Run this to see exactly which URLs succeed or fail — helps fix live data issues.")
+    if st.button("🧪 Run Diagnostics",use_container_width=True):
+        diag_sources = {
+            "Lotto Max": [
+                ("lottery.ca","https://lottery.ca/lotto-max"),
+                ("ca.lottonumbers.com","https://ca.lottonumbers.com/lotto-max/past-numbers"),
+                ("lottomaxnumbers.com","https://www.lottomaxnumbers.com/past-numbers"),
+            ],
+            "Lotto 6/49": [
+                ("lottery.ca","https://lottery.ca/lotto-649"),
+                ("ca.lottonumbers.com","https://ca.lottonumbers.com/lotto-649/past-numbers"),
+            ],
+            "Western 649": [
+                ("lottery.ca","https://lottery.ca/western-649"),
+                ("ca.lottonumbers.com","https://ca.lottonumbers.com/western-649/past-numbers"),
+            ],
+        }
+        for game_name, sources in diag_sources.items():
+            st.markdown(f"**{game_name}**")
+            for name, url in sources:
+                status, nbytes, preview, err = _fetch_debug(url)
+                if err:
+                    st.error(f"❌ {name} — {err}")
+                else:
+                    import re as _re
+                    dates = _re.findall(r'\d{4}-\d{2}-\d{2}|\w+ \d+,? \d{4}', preview)
+                    st.success(f"✅ {name} — HTTP {status} · {nbytes:,} bytes · dates in preview: {dates[:3]}")
