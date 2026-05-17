@@ -216,7 +216,8 @@ def build_oracle_tickets(freq_map, draws_since, pool, balls):
             {"label":"🌙 Astro-Numerology","nums":t3,"reason":t3_reason,"color":"#d4af37"}]
 
 def _parse_date_multi(txt):
-    for fmt in ["%B %d %Y","%B %d, %Y","%b %d, %Y","%Y-%m-%d","%d/%m/%Y","%m/%d/%Y"]:
+    for fmt in ["%A, %B %d, %Y","%B %d, %Y","%B %d %Y",
+                "%b %d, %Y","%b %d %Y","%Y-%m-%d","%d/%m/%Y","%m/%d/%Y"]:
         try: return datetime.strptime(txt.strip(), fmt).strftime("%Y-%m-%d")
         except ValueError: continue
     return None
@@ -353,26 +354,25 @@ def fetch_wclc(game_key):
             if len(nums) == ball_count: found.append((draw_date, sorted(nums), 0))
         return found
 
-    # Primary: Wayback Machine
-    for wb_target in [wclc_base[game_key],
-                      f"https://ca.lottonumbers.com/{slug_map[game_key]}/past-numbers"]:
-        resp = _fetch_wayback(wb_target)
-        if resp:
+    # Primary: direct fetch — WCLC print pages return HTTP 200 from Streamlit Cloud
+    print_url = wclc_base[game_key] + "?channel=print&printMode=true&printFile=/" + wclc_base[game_key].split("/")[-1]
+    for url in [print_url, wclc_base[game_key]]:
+        try:
+            resp = _fetch_url(url)
+            resp.raise_for_status()
             soup = _bs(resp.text)
             draws = _parse_wclc(soup) or _parse_table(soup)
             if draws: break
+        except Exception: pass
 
-    # Fallback: direct via curl_cffi
+    # Fallback: Wayback Machine
     if not draws:
-        print_url = wclc_base[game_key] + "?channel=print&printMode=true&printFile=/" + wclc_base[game_key].split("/")[-1]
-        for url in [print_url, wclc_base[game_key]]:
-            try:
-                resp = _fetch_url(url)
-                resp.raise_for_status()
+        for wb_target in [wclc_base[game_key]]:
+            resp = _fetch_wayback(wb_target)
+            if resp:
                 soup = _bs(resp.text)
                 draws = _parse_wclc(soup) or _parse_table(soup)
                 if draws: break
-            except Exception: pass
 
     if not draws: return [], f"No draws found for {game_key}"
     seen = set(); clean = []
