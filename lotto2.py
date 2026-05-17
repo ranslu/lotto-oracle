@@ -12,8 +12,25 @@ try:
     import requests
     from bs4 import BeautifulSoup
     FETCH_AVAILABLE = True
+    try:
+        import cloudscraper as _cloudscraper_mod
+        _scraper = _cloudscraper_mod.create_scraper(browser={"browser":"chrome","platform":"windows","mobile":False})
+    except Exception:
+        _scraper = None
 except ImportError:
     FETCH_AVAILABLE = False
+    _scraper = None
+
+def _fetch_url(url, timeout=20):
+    """Fetch a URL, using cloudscraper to bypass Cloudflare if available."""
+    if _scraper:
+        try:
+            r = _scraper.get(url, headers=HEADERS, timeout=timeout)
+            r.raise_for_status()
+            return r
+        except Exception:
+            pass
+    return requests.get(url, headers=HEADERS, timeout=timeout)
 
 st.set_page_config(page_title="LOTTO ORACLE", page_icon="🔮", layout="wide")
 
@@ -189,7 +206,7 @@ def fetch_lotto_max():
 
     # Source 1: ca.lottonumbers.com
     try:
-        resp = requests.get("https://ca.lottonumbers.com/lotto-max/past-numbers", headers=HEADERS, timeout=15)
+        resp = _fetch_url("https://ca.lottonumbers.com/lotto-max/past-numbers")
         resp.raise_for_status()
         soup = _bs(resp.text)
         for row in soup.select("table tr"):
@@ -209,7 +226,7 @@ def fetch_lotto_max():
     # Source 2: lottomaxnumbers.com
     if not draws:
         try:
-            resp = requests.get("https://www.lottomaxnumbers.com/past-numbers", headers=HEADERS, timeout=15)
+            resp = _fetch_url("https://www.lottomaxnumbers.com/past-numbers")
             resp.raise_for_status()
             soup = _bs(resp.text)
             for row in soup.select("table tr"):
@@ -232,7 +249,7 @@ def fetch_lotto_max():
     # Source 3: lotteryextreme.com
     if not draws:
         try:
-            resp = requests.get("https://www.lotteryextreme.com/canada/lotto_max-winning_numbers", headers=HEADERS, timeout=15)
+            resp = _fetch_url("https://www.lotteryextreme.com/canada/lotto_max-winning_numbers")
             resp.raise_for_status()
             import re
             soup = _bs(resp.text)
@@ -263,7 +280,7 @@ def fetch_wclc(game_key):
     slug_map = {"lotto_649": "lotto-649", "western_649": "western-649", "western_max": "western-max"}
     try:
         url = f"https://ca.lottonumbers.com/{slug_map[game_key]}/past-numbers"
-        resp = requests.get(url, headers=HEADERS, timeout=15)
+        resp = _fetch_url(url)
         resp.raise_for_status()
         soup = _bs(resp.text)
         for row in soup.select("table tr"):
@@ -288,7 +305,7 @@ def fetch_wclc(game_key):
             "western_max":"https://www.wclc.com/winning-numbers/western-max-extra.htm?channel=print&printMode=true&printFile=/western-max-extra.htm",
         }
         try:
-            resp = requests.get(wclc_urls[game_key], headers=HEADERS, timeout=15)
+            resp = _fetch_url(wclc_urls[game_key])
             resp.raise_for_status()
             soup = _bs(resp.text)
             for strong in soup.find_all("strong"):
@@ -335,11 +352,9 @@ def fetch_daily_grand():
 
     # --- Source 1: lotteryextreme.com (confirmed working) ---
     try:
-        resp = requests.get(
-            "https://www.lotteryextreme.com/canada/dailygrand-winningnumbers",
-            headers=HEADERS, timeout=15)
+        resp = _fetch_url("https://www.lotteryextreme.com/canada/dailygrand-winningnumbers")
         resp.raise_for_status()
-        soup = BeautifulSoup(resp.text, "lxml")
+        soup = _bs(resp.text)
         # Find all td cells - dates are in format "Apr 23 2026 (2026-04-23 Thu)"
         # Numbers are in li items within the next td
         all_tds = soup.find_all("td")
@@ -367,11 +382,9 @@ def fetch_daily_grand():
     # --- Source 2: ca.lottonumbers.com ---
     if not draws:
         try:
-            resp2 = requests.get(
-                "https://ca.lottonumbers.com/daily-grand/past-numbers",
-                headers=HEADERS, timeout=15)
+            resp2 = _fetch_url("https://ca.lottonumbers.com/daily-grand/past-numbers")
             resp2.raise_for_status()
-            soup2 = BeautifulSoup(resp2.text, "lxml")
+            soup2 = _bs(resp2.text)
             for row in soup2.select("table tr"):
                 cells = row.find_all("td")
                 if len(cells) < 2: continue
@@ -392,11 +405,9 @@ def fetch_daily_grand():
     # --- Source 3: lotto-8.com ---
     if not draws:
         try:
-            resp3 = requests.get(
-                "https://www.lotto-8.com/canada/listltoCADG.asp",
-                headers=HEADERS, timeout=15)
+            resp3 = _fetch_url("https://www.lotto-8.com/canada/listltoCADG.asp")
             resp3.raise_for_status()
-            soup3 = BeautifulSoup(resp3.text, "lxml")
+            soup3 = _bs(resp3.text)
             for row in soup3.select("table tr"):
                 cells = row.find_all("td")
                 if len(cells) < 2: continue
@@ -413,11 +424,9 @@ def fetch_daily_grand():
     # --- Source 4: playnow.com ---
     if not draws:
         try:
-            resp4 = requests.get(
-                "https://www.playnow.com/lottery/daily-grand-winning-numbers/",
-                headers=HEADERS, timeout=15)
+            resp4 = _fetch_url("https://www.playnow.com/lottery/daily-grand-winning-numbers/")
             resp4.raise_for_status()
-            soup4 = BeautifulSoup(resp4.text, "lxml")
+            soup4 = _bs(resp4.text)
             for row in soup4.select("table tr, .draw-result, .result-row"):
                 cells = row.find_all(["td","div","span"])
                 if len(cells) < 2: continue
@@ -474,11 +483,9 @@ def fetch_winners():
 
     # --- WCLC Alberta Winners ---
     try:
-        resp = requests.get(
-            "https://www.wclc.com/media-centre/recent-winner-releases/alberta-winner-releases.htm",
-            headers=HEADERS, timeout=15)
+        resp = _fetch_url("https://www.wclc.com/media-centre/recent-winner-releases/alberta-winner-releases.htm")
         resp.raise_for_status()
-        soup = BeautifulSoup(resp.text, "lxml")
+        soup = _bs(resp.text)
         # Grab links with title text
         for a in soup.find_all("a", href=True):
             txt = a.get_text(separator=" ", strip=True)
@@ -521,11 +528,9 @@ def fetch_winners():
 
     # --- WCLC Recent Winners (all provinces) ---
     try:
-        resp2 = requests.get(
-            "https://www.wclc.com/media-centre/recent-winner-releases/recent-winner-releases.htm",
-            headers=HEADERS, timeout=15)
+        resp2 = _fetch_url("https://www.wclc.com/media-centre/recent-winner-releases/recent-winner-releases.htm")
         resp2.raise_for_status()
-        soup2 = BeautifulSoup(resp2.text, "lxml")
+        soup2 = _bs(resp2.text)
         for a in soup2.find_all("a", href=True):
             txt = a.get_text(separator=" ", strip=True)
             if not txt or len(txt) < 15: continue
@@ -547,11 +552,9 @@ def fetch_winners():
 
     # --- OLG Winners news feed ---
     try:
-        resp3 = requests.get(
-            "https://about.olg.ca/?s=winners",
-            headers=HEADERS, timeout=15)
+        resp3 = _fetch_url("https://about.olg.ca/?s=winners")
         resp3.raise_for_status()
-        soup3 = BeautifulSoup(resp3.text, "lxml")
+        soup3 = _bs(resp3.text)
         # OLG uses article tags with h2/h3 + links
         for article in soup3.select("article, .post, .entry"):
             a_tag = article.find("a", href=True)
@@ -597,11 +600,9 @@ def fetch_winners():
 
     # --- Lottomaxnumbers prize breakdown links ---
     try:
-        resp4 = requests.get(
-            "https://www.lottomaxnumbers.com/past-numbers",
-            headers=HEADERS, timeout=15)
+        resp4 = _fetch_url("https://www.lottomaxnumbers.com/past-numbers")
         resp4.raise_for_status()
-        soup4 = BeautifulSoup(resp4.text, "lxml")
+        soup4 = _bs(resp4.text)
         for a in soup4.find_all("a", href=True):
             txt = a.get_text(strip=True)
             href = a["href"]
@@ -632,7 +633,7 @@ def fetch_winners():
 
 def fetch_scratch_tickets():
     try:
-        resp=requests.get("https://www.wclc.com/games/scratch-win/prizes-remaining-1.htm",headers=HEADERS,timeout=15)
+        resp=_fetch_url("https://www.wclc.com/games/scratch-win/prizes-remaining-1.htm")
         resp.raise_for_status()
     except Exception as e: return [],f"Error: {e}"
     soup=BeautifulSoup(resp.text,"lxml"); tickets=[]
