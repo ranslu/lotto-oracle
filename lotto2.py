@@ -37,12 +37,16 @@ st.set_page_config(page_title="LOTTO ORACLE", page_icon="🔮", layout="wide")
 st.markdown("""
 <style>
 body, .stApp { background:#060e1a !important; }
+/* Default text bright yellow for phone readability */
+body, .stApp, .stMarkdown, .stText, p, li, span, div,
+.stSelectbox, .stSlider, .stRadio, .stCaption,
+[data-testid="stMarkdownContainer"] { color:#ffe44d !important; }
 .stButton button {
     min-height:56px !important; font-size:15px !important;
     font-weight:700 !important; letter-spacing:1px !important;
     border-radius:10px !important; border:1px solid rgba(255,255,255,0.08) !important;
     background:linear-gradient(135deg,#0a1f3c,#0d2a50) !important;
-    color:#c8e6ff !important; transition:all .2s !important;
+    color:#ffe44d !important; transition:all .2s !important;
     touch-action:manipulation !important;
 }
 .stButton button:hover {
@@ -50,17 +54,17 @@ body, .stApp { background:#060e1a !important; }
     border-color:#00f0ff !important; color:#00f0ff !important;
     box-shadow:0 0 12px rgba(0,240,255,0.3) !important;
 }
-.stCheckbox label { font-size:14px !important; color:#a0c4e8 !important; font-weight:600 !important; }
+.stCheckbox label { font-size:14px !important; color:#ffe44d !important; font-weight:600 !important; }
 [data-testid="metric-container"] {
     background:linear-gradient(135deg,#0a1a30,#0d2040) !important;
     border:1px solid rgba(0,240,255,0.15) !important;
     border-radius:12px !important; padding:12px !important;
 }
-[data-testid="metric-container"] label { color:#6a9abf !important; font-size:11px !important; letter-spacing:1px !important; }
+[data-testid="metric-container"] label { color:#ffe44d !important; font-size:11px !important; letter-spacing:1px !important; }
 [data-testid="metric-container"] [data-testid="metric-value"] { color:#00f0ff !important; font-size:24px !important; font-weight:900 !important; }
-.stTabs [data-baseweb="tab"] { font-size:13px !important; font-weight:700 !important; color:#6a9abf !important; border-radius:8px 8px 0 0 !important; padding:8px 16px !important; }
+.stTabs [data-baseweb="tab"] { font-size:13px !important; font-weight:700 !important; color:#ffe44d !important; border-radius:8px 8px 0 0 !important; padding:8px 16px !important; }
 .stTabs [aria-selected="true"] { color:#00f0ff !important; border-bottom:2px solid #00f0ff !important; }
-.stSelectbox label, .stSlider label, .stRadio label { color:#a0c4e8 !important; font-weight:600 !important; }
+.stSelectbox label, .stSlider label, .stRadio label { color:#ffe44d !important; font-weight:600 !important; }
 hr { border-color:rgba(0,240,255,0.1) !important; }
 .ball { display:inline-flex; align-items:center; justify-content:center; width:36px; height:36px; border-radius:50%; font-weight:900; font-size:13px; margin:2px; border:2px solid; }
 .ball-hot  { background:rgba(255,80,0,0.2);  border-color:#ff5000; color:#ff8040; }
@@ -963,11 +967,36 @@ elif pg=="o":
         f"&nbsp;&nbsp;|&nbsp;&nbsp;<span style='color:#a080ff;'>♈ Ruling Sign: {sign_label}</span>"
         f"</div>",unsafe_allow_html=True)
 
+    # ── Time window selector ──
+    st.markdown("<p style='color:#ffe44d;font-weight:700;margin-bottom:4px;'>📅 Analysis Window</p>",unsafe_allow_html=True)
+    win_col1,win_col2,win_col3=st.columns(3)
+    with win_col1: btn_3m=st.button("3 Months",use_container_width=True,key="win_3m")
+    with win_col2: btn_6m=st.button("6 Months",use_container_width=True,key="win_6m")
+    with win_col3: btn_1y=st.button("1 Year",  use_container_width=True,key="win_1y")
+    if btn_3m: st.session_state["oracle_window"]=90
+    if btn_6m: st.session_state["oracle_window"]=180
+    if btn_1y: st.session_state["oracle_window"]=365
+    oracle_days=st.session_state.get("oracle_window",365)
+    window_label={90:"3 Months",180:"6 Months",365:"1 Year"}[oracle_days]
+    cutoff=pd.Timestamp.now()-pd.Timedelta(days=oracle_days)
+    df_win=df[df["date"]>=cutoff]
+    if len(df_win)<5: df_win=df  # not enough data, use all
+    win_freq_map,win_draws_since,win_sums=compute_stats(df_win,pool)
+    win_avg=np.mean(list(win_freq_map.values()))
+    win_hot_thr=win_avg*1.3; win_cold_thr=win_avg*0.6
+    st.markdown(
+        f"<div style='background:rgba(0,240,255,0.06);border:1px solid rgba(0,240,255,0.2);"
+        f"border-radius:8px;padding:8px 14px;margin-bottom:10px;'>"
+        f"<span style='color:#00f0ff;font-weight:700;'>📊 Using: {window_label}</span>"
+        f"<span style='color:#ffe44d;'> · {len(df_win)} draws · "
+        f"{df_win['date'].min().strftime('%b %d, %Y')} → {df_win['date'].max().strftime('%b %d, %Y')}</span>"
+        f"</div>",unsafe_allow_html=True)
+
     st.markdown("<h3 style='color:#00f0ff;font-weight:800;'>🔮 Oracle's 3 Best Ticket Suggestions</h3>",unsafe_allow_html=True)
     st.caption("⚠️ Best-guess only — based on statistics, astrology & numerology. Lottery draws are random. Play responsibly.")
-    oracle_tickets=build_oracle_tickets(freq_map,draws_since,pool,balls_per_draw)
+    oracle_tickets=build_oracle_tickets(win_freq_map,win_draws_since,pool,balls_per_draw)
     for tk in oracle_tickets:
-        bh=render_balls(tk["nums"],freq_map,draws_since,pool,hot_threshold,cold_threshold)
+        bh=render_balls(tk["nums"],win_freq_map,win_draws_since,pool,win_hot_thr,win_cold_thr)
         if game_key=="daily_grand":
             gn=random.choice(range(1,8))
             extra=f" &nbsp; 👑 <span class='ball ball-grand'>{gn:02d}</span>"
@@ -977,25 +1006,25 @@ elif pg=="o":
             f"border-left:4px solid {tk['color']};border-radius:10px;padding:16px 20px;margin-bottom:14px;'>"
             f"<div style='font-size:15px;font-weight:800;color:{tk['color']};margin-bottom:8px;'>{tk['label']}</div>"
             f"<div style='margin-bottom:10px;'>{bh}{extra}</div>"
-            f"<div style='font-size:12px;color:#7a9abf;line-height:1.6;'>{tk['reason']}</div>"
+            f"<div style='font-size:12px;color:#ffe44d;line-height:1.6;'>{tk['reason']}</div>"
             f"</div>",unsafe_allow_html=True)
 
     st.markdown("---")
     st.markdown("<h3 style='color:#ffc940;font-weight:800;'>⚡ Custom Ticket Generator</h3>",unsafe_allow_html=True)
     strategy=st.selectbox("Strategy",["Balanced","Hot Numbers","Due Numbers","Cold Numbers","Random"])
     num_tickets=st.slider("Tickets to Generate",1,8,4)
-    sum_min,sum_max=st.slider("Target Sum Range",10,500,(int(np.mean(sums)*0.8),int(np.mean(sums)*1.2)))
+    sum_min,sum_max=st.slider("Target Sum Range",10,500,(int(np.mean(win_sums)*0.8),int(np.mean(win_sums)*1.2)))
     odd_opts=["Any"]+[f"{k}O/{balls_per_draw-k}E" for k in range(balls_per_draw+1)]
     odd_target=st.radio("Odd/Even Filter",odd_opts[:5],horizontal=True)
 
     def pick_ticket(strat,s_min,s_max,ot):
         pool_list=list(range(1,pool+1))
         for _ in range(500):
-            if strat=="Hot Numbers":    w=[freq_map.get(n,1)**2 for n in pool_list]
-            elif strat=="Due Numbers":  w=[draws_since.get(n,1)**2 for n in pool_list]
-            elif strat=="Cold Numbers": mx=max(freq_map.values()); w=[mx-freq_map.get(n,0)+1 for n in pool_list]
+            if strat=="Hot Numbers":    w=[win_freq_map.get(n,1)**2 for n in pool_list]
+            elif strat=="Due Numbers":  w=[win_draws_since.get(n,1)**2 for n in pool_list]
+            elif strat=="Cold Numbers": mx=max(win_freq_map.values()); w=[mx-win_freq_map.get(n,0)+1 for n in pool_list]
             elif strat=="Balanced":
-                wf=[freq_map.get(n,1) for n in pool_list]; wd=[draws_since.get(n,1) for n in pool_list]
+                wf=[win_freq_map.get(n,1) for n in pool_list]; wd=[win_draws_since.get(n,1) for n in pool_list]
                 w=[0.4*f+0.4*d+0.2 for f,d in zip(wf,wd)]
             else: w=[1]*len(pool_list)
             tot=sum(w); probs=[x/tot for x in w]
