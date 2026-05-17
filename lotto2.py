@@ -88,7 +88,15 @@ def save_scratch_cache(tickets, fetched_at):
 def load_scratch_cache():
     return json.load(open(SCRATCH_FILE)) if os.path.exists(SCRATCH_FILE) else None
 
-HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+    "Accept-Language": "en-CA,en;q=0.9",
+    "Accept-Encoding": "gzip, deflate, br",
+    "Connection": "keep-alive",
+    "Upgrade-Insecure-Requests": "1",
+    "Cache-Control": "no-cache",
+}
 
 GAMES = {
     "lotto_max":   {"name":"Lotto Max",   "emoji":"🔮","balls":7,"pool":52,"draws":"Tue & Fri","color":"#00f0ff"},
@@ -164,53 +172,144 @@ def build_oracle_tickets(freq_map, draws_since, pool, balls):
             {"label":"🔥❄️ Hot/Cold Fusion","nums":t2,"reason":t2_reason,"color":"#ffc940"},
             {"label":"🌙 Astro-Numerology","nums":t3,"reason":t3_reason,"color":"#d4af37"}]
 
-def fetch_lotto_max():
-    try:
-        resp=requests.get("https://www.lottomaxnumbers.com/past-numbers",headers=HEADERS,timeout=15)
-        resp.raise_for_status()
-    except Exception as e: return [],f"Error: {e}"
-    soup=BeautifulSoup(resp.text,"lxml"); draws=[]
-    for row in soup.select("table tr"):
-        cells=row.find_all("td")
-        if len(cells)<2: continue
-        lnk=cells[0].find("a")
-        if not lnk: continue
-        try: draw_date=datetime.strptime(lnk.get_text(strip=True),"%B %d %Y").strftime("%Y-%m-%d")
+def _parse_date_multi(txt):
+    for fmt in ["%B %d %Y","%B %d, %Y","%b %d, %Y","%Y-%m-%d","%d/%m/%Y","%m/%d/%Y"]:
+        try: return datetime.strptime(txt.strip(), fmt).strftime("%Y-%m-%d")
         except ValueError: continue
-        nums,bonus=[],None
-        for i,li in enumerate(cells[1].find_all("li")):
-            t=li.get_text(strip=True)
-            if not t.isdigit(): continue
-            if i<7: nums.append(int(t))
-            else: bonus=int(t)
-        if len(nums)==7 and bonus is not None: draws.append((draw_date,sorted(nums),bonus))
-    if not draws: return [],"No data found"
-    return draws,f"Fetched {len(draws)} draws · latest: {draws[0][0]}"
+    return None
+
+def _bs(html):
+    for parser in ["lxml","html.parser"]:
+        try: return BeautifulSoup(html, parser)
+        except Exception: continue
+    return BeautifulSoup(html, "html.parser")
+
+def fetch_lotto_max():
+    draws = []
+
+    # Source 1: ca.lottonumbers.com
+    try:
+        resp = requests.get("https://ca.lottonumbers.com/lotto-max/past-numbers", headers=HEADERS, timeout=15)
+        resp.raise_for_status()
+        soup = _bs(resp.text)
+        for row in soup.select("table tr"):
+            cells = row.find_all("td")
+            if len(cells) < 2: continue
+            draw_date = _parse_date_multi(cells[0].get_text(strip=True))
+            if not draw_date: continue
+            nums = [int(li.get_text(strip=True)) for li in cells[1].find_all("li") if li.get_text(strip=True).isdigit()]
+            bonus = 0
+            if len(cells) > 2:
+                bt = cells[2].get_text(strip=True)
+                if bt.isdigit(): bonus = int(bt)
+            if len(nums) == 7:
+                draws.append((draw_date, sorted(nums), bonus))
+    except Exception: pass
+
+    # Source 2: lottomaxnumbers.com
+    if not draws:
+        try:
+            resp = requests.get("https://www.lottomaxnumbers.com/past-numbers", headers=HEADERS, timeout=15)
+            resp.raise_for_status()
+            soup = _bs(resp.text)
+            for row in soup.select("table tr"):
+                cells = row.find_all("td")
+                if len(cells) < 2: continue
+                lnk = cells[0].find("a")
+                if not lnk: continue
+                draw_date = _parse_date_multi(lnk.get_text(strip=True))
+                if not draw_date: continue
+                nums, bonus = [], None
+                for i, li in enumerate(cells[1].find_all("li")):
+                    t = li.get_text(strip=True)
+                    if not t.isdigit(): continue
+                    if i < 7: nums.append(int(t))
+                    else: bonus = int(t)
+                if len(nums) == 7 and bonus is not None:
+                    draws.append((draw_date, sorted(nums), bonus))
+        except Exception: pass
+
+    # Source 3: lotteryextreme.com
+    if not draws:
+        try:
+            resp = requests.get("https://www.lotteryextreme.com/canada/lotto_max-winning_numbers", headers=HEADERS, timeout=15)
+            resp.raise_for_status()
+            import re
+            soup = _bs(resp.text)
+            for td in soup.find_all("td"):
+                txt = td.get_text(" ", strip=True)
+                m = re.search(r"\((\d{4}-\d{2}-\d{2})", txt)
+                if m:
+                    draw_date = m.group(1)
+                    lis = td.find_all("li")
+                    nums = [int(li.get_text(strip=True)) for li in lis if li.get_text(strip=True).isdigit()]
+                    if len(nums) >= 7:
+                        draws.append((draw_date, sorted(nums[:7]), nums[7] if len(nums) > 7 else 0))
+        except Exception: pass
+
+    if not draws: return [], "No data found"
+    seen = set(); clean = []
+    for d in draws:
+        if d[0] not in seen: seen.add(d[0]); clean.append(d)
+    clean.sort(key=lambda x: x[0], reverse=True)
+    return clean, f"Fetched {len(clean)} draws · latest: {clean[0][0]}"
 
 def fetch_wclc(game_key):
-    urls={"lotto_649":"https://www.wclc.com/winning-numbers/lotto-649-extra.htm?channel=print&printMode=true&printFile=/lotto-649-extra.htm",
-          "western_649":"https://www.wclc.com/winning-numbers/western-649-extra.htm?channel=print&printMode=true&printFile=/western-649-extra.htm",
-          "western_max":"https://www.wclc.com/winning-numbers/western-max-extra.htm?channel=print&printMode=true&printFile=/western-max-extra.htm"}
-    ball_count=GAMES[game_key]["balls"]
+    import re
+    ball_count = GAMES[game_key]["balls"]
+    draws = []
+
+    # Source 1: ca.lottonumbers.com (cloud-friendly)
+    slug_map = {"lotto_649": "lotto-649", "western_649": "western-649", "western_max": "western-max"}
     try:
-        resp=requests.get(urls[game_key],headers=HEADERS,timeout=15); resp.raise_for_status()
-    except Exception as e: return [],f"Error: {e}"
-    soup=BeautifulSoup(resp.text,"lxml"); draws=[]
-    for strong in soup.find_all("strong"):
-        txt=strong.get_text(strip=True)
-        try: draw_date=datetime.strptime(txt,"%A, %B %d, %Y").strftime("%Y-%m-%d")
-        except ValueError:
-            try: draw_date=datetime.strptime(txt,"%B %d, %Y").strftime("%Y-%m-%d")
-            except ValueError: continue
-        ul=strong.find_next("ul")
-        if not ul: continue
-        items=[li.get_text(strip=True) for li in ul.find_all("li") if li.get_text(strip=True).isdigit()]
-        if len(items)<ball_count: continue
-        nums=sorted([int(x) for x in items[:ball_count]])
-        bonus=int(items[ball_count]) if len(items)>ball_count else 0
-        draws.append((draw_date,nums,bonus))
-    if not draws: return [],f"No draws found for {game_key}"
-    return draws,f"Fetched {len(draws)} draws · latest: {draws[0][0]}"
+        url = f"https://ca.lottonumbers.com/{slug_map[game_key]}/past-numbers"
+        resp = requests.get(url, headers=HEADERS, timeout=15)
+        resp.raise_for_status()
+        soup = _bs(resp.text)
+        for row in soup.select("table tr"):
+            cells = row.find_all("td")
+            if len(cells) < 2: continue
+            draw_date = _parse_date_multi(cells[0].get_text(strip=True))
+            if not draw_date: continue
+            nums = [int(li.get_text(strip=True)) for li in cells[1].find_all("li") if li.get_text(strip=True).isdigit()]
+            bonus = 0
+            if len(cells) > 2:
+                bt = cells[2].get_text(strip=True)
+                if bt.isdigit(): bonus = int(bt)
+            if len(nums) == ball_count:
+                draws.append((draw_date, sorted(nums), bonus))
+    except Exception: pass
+
+    # Source 2: wclc.com print pages
+    if not draws:
+        wclc_urls = {
+            "lotto_649":  "https://www.wclc.com/winning-numbers/lotto-649-extra.htm?channel=print&printMode=true&printFile=/lotto-649-extra.htm",
+            "western_649":"https://www.wclc.com/winning-numbers/western-649-extra.htm?channel=print&printMode=true&printFile=/western-649-extra.htm",
+            "western_max":"https://www.wclc.com/winning-numbers/western-max-extra.htm?channel=print&printMode=true&printFile=/western-max-extra.htm",
+        }
+        try:
+            resp = requests.get(wclc_urls[game_key], headers=HEADERS, timeout=15)
+            resp.raise_for_status()
+            soup = _bs(resp.text)
+            for strong in soup.find_all("strong"):
+                txt = strong.get_text(strip=True)
+                draw_date = _parse_date_multi(txt)
+                if not draw_date: continue
+                ul = strong.find_next("ul")
+                if not ul: continue
+                items = [li.get_text(strip=True) for li in ul.find_all("li") if li.get_text(strip=True).isdigit()]
+                if len(items) < ball_count: continue
+                nums = sorted([int(x) for x in items[:ball_count]])
+                bonus = int(items[ball_count]) if len(items) > ball_count else 0
+                draws.append((draw_date, nums, bonus))
+        except Exception: pass
+
+    if not draws: return [], f"No draws found for {game_key}"
+    seen = set(); clean = []
+    for d in draws:
+        if d[0] not in seen: seen.add(d[0]); clean.append(d)
+    clean.sort(key=lambda x: x[0], reverse=True)
+    return clean, f"Fetched {len(clean)} draws · latest: {clean[0][0]}"
 
 def fetch_daily_grand():
     """Fetch Daily Grand results from lotteryextreme.com."""
