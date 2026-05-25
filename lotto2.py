@@ -55,6 +55,22 @@ def _fetch_debug(url):
         return None, 0, "", str(e)
 
 st.set_page_config(page_title="LOTTO ORACLE", page_icon="🔮", layout="wide")
+# ── PWA: manifest + inline service worker for home screen install ──
+st.markdown("""
+<link rel="manifest" href="/~/+/static/manifest.json">
+<script>
+if ('serviceWorker' in navigator) {
+  var sw = [
+    "self.addEventListener('install',e=>self.skipWaiting());",
+    "self.addEventListener('activate',e=>self.clients.claim());",
+    "self.addEventListener('fetch',e=>e.respondWith(fetch(e.request)));"
+  ].join('\\n');
+  var blob = new Blob([sw], {type:'application/javascript'});
+  navigator.serviceWorker.register(URL.createObjectURL(blob), {scope:'/'}).catch(function(){});
+}
+</script>
+""", unsafe_allow_html=True)
+# ──────────────────────────────────────────────────────────────────
 
 st.markdown("""
 <style>
