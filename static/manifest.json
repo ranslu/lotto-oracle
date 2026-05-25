@@ -1,0 +1,13 @@
+{
+  "name": "Lotto Oracle",
+  "short_name": "Lotto Oracle",
+  "description": "Lottery number analysis and prediction",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#060e1a",
+  "theme_color": "#00f0ff",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}
