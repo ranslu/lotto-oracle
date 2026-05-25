@@ -1,15 +1,15 @@
-name: Fetch Lottery Data
+name: Fetch Lottery Data & Email Picks
 
 on:
   schedule:
-    - cron: '0 4 * * *'   # Daily at 4 AM UTC (10 PM Mountain) — catches all draw nights
-  workflow_dispatch:        # Allow manual trigger from GitHub
+    - cron: '30 4 * * *'   # Daily at 4:30 AM UTC (10:30 PM Mountain)
+  workflow_dispatch:
 
 permissions:
   contents: write
 
 jobs:
-  fetch:
+  fetch-and-email:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -21,7 +21,7 @@ jobs:
       - name: Install dependencies
         run: pip install requests beautifulsoup4 lxml
 
-      - name: Fetch lottery data
+      - name: Fetch last 24h lottery draws
         run: python fetch_lottery.py
 
       - name: Commit updated data
@@ -29,3 +29,10 @@ jobs:
         with:
           commit_message: "chore: auto-update lottery data [skip ci]"
           file_pattern: lottery_data.json
+
+      - name: Email daily picks
+        env:
+          GMAIL_ADDRESS:      ${{ secrets.GMAIL_ADDRESS }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          RECIPIENT_EMAIL:    ${{ secrets.RECIPIENT_EMAIL }}
+        run: python email_picks.py
