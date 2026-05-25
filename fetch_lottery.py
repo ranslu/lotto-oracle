@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
 Runs in GitHub Actions to scrape lottery results and save to lottery_data.json.
-Incremental: loads existing data, only fetches what's new, never loses history.
+Incremental: loads existing data, only fetches new draws, never loses history.
 
 Sources:
-  ca.lottonumbers.com  — Lotto Max, Lotto 649 (static HTML + year archives)
-  lotterycanada.com    — Daily Grand (static-rendered recent draws)
+  ca.lottonumbers.com  — Lotto Max, Lotto 649 (year-archive for dates + per-draw for numbers)
+  lotterycanada.com    — Daily Grand
   wclc.com             — Western 649, Western Max
 """
 import json, requests, re, time
@@ -19,11 +19,14 @@ HEADERS = {
     "Accept-Language": "en-CA,en;q=0.9",
 }
 
+LC_BASE   = "https://ca.lottonumbers.com"
+LCCA_BASE = "https://www.lotterycanada.com"
+WCLC_BASE = "https://www.wclc.com/winning-numbers"
+
 WEEKDAYS = {"Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"}
 
-LC_BASE    = "https://ca.lottonumbers.com"   # ca.lottonumbers.com
-LCCA_BASE  = "https://www.lotterycanada.com" # lotterycanada.com
-WCLC_BASE  = "https://www.wclc.com/winning-numbers"
+# Max individual draw-page fetches per game per run (builds history incrementally)
+MAX_FETCHES_PER_GAME = 50
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
@@ -35,14 +38,12 @@ def _bs(html):
     return BeautifulSoup(html, "html.parser")
 
 def _date(txt):
-    """Parse many date formats → YYYY-MM-DD string, or None."""
     txt = txt.strip()
-    # Strip leading weekday if present: "Friday May 22 2026" → "May 22 2026"
     parts = txt.split(None, 1)
     if parts and parts[0] in WEEKDAYS:
         txt = parts[1].strip() if len(parts) > 1 else ""
-    for fmt in ["%B %d, %Y", "%B %d %Y", "%b %d, %Y", "%b %d %Y", "%Y-%m-%d",
-                "%A, %B %d, %Y"]:
+    for fmt in ["%B %d, %Y", "%B %d %Y", "%b %d, %Y", "%b %d %Y",
+                "%Y-%m-%d", "%A, %B %d, %Y"]:
         try:
             return datetime.strptime(txt, fmt).strftime("%Y-%m-%d")
         except ValueError:
@@ -63,21 +64,111 @@ def load_existing():
         return {}
 
 def _merge(new_draws, existing):
-    """Merge new draws with existing, new overrides on same date, keeps all dates."""
+    """Merge new into existing; new wins on same date. Return sorted newest-first."""
     merged = {d[0]: d for d in existing}
-    for draw in new_draws:
-        merged[draw[0]] = draw
+    for d in new_draws:
+        merged[d[0]] = d
     return sorted(merged.values(), key=lambda x: x[0], reverse=True)
 
 
-# ── ca.lottonumbers.com parser ────────────────────────────────────────────────
+# ── ca.lottonumbers.com scrapers ──────────────────────────────────────────────
+
+def _year_dates(game_slug, year):
+    """
+    Fetch the year archive page and return all draw dates found in hrefs.
+    Fast: only regex on raw HTML, no full parse.
+    URL: https://ca.lottonumbers.com/{game_slug}/numbers/{year}
+    """
+    url = f"{LC_BASE}/{game_slug}/numbers/{year}"
+    try:
+        r = _get(url)
+        pat = re.compile(rf"/{re.escape(game_slug)}/numbers/(\d{{4}}-\d{{2}}-\d{{2}})")
+        dates = list(dict.fromkeys(pat.findall(r.text)))   # unique, order-preserved
+        print(f"    {year}: {len(dates)} draw dates found")
+        return dates
+    except Exception as e:
+        print(f"    {year}: error — {e}")
+        return []
+
+def _draw_page(game_slug, date_str, ball_count):
+    """
+    Fetch one draw page and return (sorted_main_nums, bonus) or (None, None).
+    URL: https://ca.lottonumbers.com/{game_slug}/numbers/YYYY-MM-DD
+    Page has <h2>Winning Numbers</h2> followed by <ul><li>number</li>…
+    """
+    url = f"{LC_BASE}/{game_slug}/numbers/{date_str}"
+    try:
+        soup = _bs(_get(url).text)
+
+        # Primary: find "Winning Numbers" heading then next <ul>
+        for h in soup.find_all(["h2", "h3", "h4"]):
+            if "winning" in h.get_text(strip=True).lower():
+                ul = h.find_next("ul")
+                if ul:
+                    items = [li.get_text(strip=True) for li in ul.find_all("li")
+                             if li.get_text(strip=True).isdigit()]
+                    nums = [int(x) for x in items if 1 <= int(x) <= 50]
+                    if len(nums) >= ball_count:
+                        return sorted(nums[:ball_count]), (nums[ball_count] if len(nums) > ball_count else 0)
+
+        # Fallback: find any <ul> with the right count of lottery numbers
+        for ul in soup.find_all("ul"):
+            items = [li.get_text(strip=True) for li in ul.find_all("li")
+                     if li.get_text(strip=True).isdigit()]
+            nums = [int(x) for x in items if 1 <= int(x) <= 50]
+            if len(nums) >= ball_count:
+                return sorted(nums[:ball_count]), (nums[ball_count] if len(nums) > ball_count else 0)
+
+    except Exception as e:
+        print(f"      {date_str} error: {e}")
+    return None, None
+
+def _fetch_lc_game(game_slug, ball_count, existing, num_years=3):
+    """
+    Main incremental fetcher for ca.lottonumbers.com games.
+    1. Collects draw dates from year-archive pages (fast, no JS needed).
+    2. Fetches individual draw pages only for dates not already in `existing`.
+    3. Caps new fetches at MAX_FETCHES_PER_GAME per run.
+    """
+    existing_map = {d[0]: d for d in existing}
+    current_year = datetime.utcnow().year
+
+    # Gather all known draw dates across the requested years
+    all_dates = []
+    for year in range(current_year, current_year - num_years, -1):
+        dates = _year_dates(game_slug, year)
+        all_dates.extend(dates)
+        if dates:
+            time.sleep(0.3)
+
+    if not all_dates:
+        print(f"  WARNING: no dates found for {game_slug} — keeping existing")
+        return existing
+
+    # Determine which dates are new (not in existing)
+    new_dates = [d for d in all_dates if d not in existing_map]
+    print(f"  {len(all_dates)} total dates, {len(new_dates)} new")
+
+    # Fetch individual draw pages for new dates (capped)
+    fetched = []
+    for date_str in new_dates[:MAX_FETCHES_PER_GAME]:
+        main, bonus = _draw_page(game_slug, date_str, ball_count)
+        if main:
+            fetched.append([date_str, main, bonus or 0])
+        time.sleep(0.35)
+
+    if len(new_dates) > MAX_FETCHES_PER_GAME:
+        remaining = len(new_dates) - MAX_FETCHES_PER_GAME
+        print(f"  {remaining} dates still pending (will fetch on next runs)")
+
+    print(f"  fetched {len(fetched)} new draws this run")
+    return _merge(fetched, existing)
+
+
+# ── WCLC parser (unchanged — static HTML, strong+ul structure) ───────────────
 
 def _parse_strong_ul(soup, ball_count):
-    """
-    Parse pages that use <strong> for the draw date and <ul><li> for numbers.
-    Works for both ca.lottonumbers.com and wclc.com.
-    Returns [(date, sorted_main_nums, bonus)].
-    """
+    """Parse pages using <strong>date</strong> … <ul><li>num</li>… structure."""
     draws = []
     for strong in soup.find_all("strong"):
         d = _date(strong.get_text(strip=True))
@@ -95,73 +186,27 @@ def _parse_strong_ul(soup, ball_count):
         draws.append([d, nums, bonus])
     return draws
 
-def _fetch_lc_years(game_slug, ball_count, num_years=3):
-    """
-    Fetch year-archive pages from ca.lottonumbers.com.
-    URL: /lotto-max/numbers/2025, /lotto-649/numbers/2025, etc.
-    Fetches the current year plus `num_years-1` previous years.
-    """
-    draws = []
-    current_year = datetime.utcnow().year
-    for year in range(current_year, current_year - num_years, -1):
-        url = f"{LC_BASE}/{game_slug}/numbers/{year}"
-        try:
-            soup = _bs(_get(url).text)
-            year_draws = _parse_strong_ul(soup, ball_count)
-            draws.extend(year_draws)
-            print(f"    {year}: {len(year_draws)} draws")
-            if year_draws:
-                time.sleep(0.4)
-        except Exception as e:
-            print(f"    {year}: error — {e}")
-    return draws
-
 
 # ── per-game fetchers ─────────────────────────────────────────────────────────
 
 def fetch_lotto_max(existing):
-    """
-    ca.lottonumbers.com/lotto-max/numbers/YYYY — static HTML, year archives.
-    Fetches current + 2 prior years; merges with all existing history.
-    """
-    existing_map = {d[0]: d for d in existing}
+    print(f"  existing: {len(existing)} draws")
     num_years = 3 if len(existing) < 80 else 2
-
-    print(f"  fetching {num_years} year archives from ca.lottonumbers.com...")
-    new_draws = _fetch_lc_years("lotto-max", 7, num_years)
-
-    if not new_draws:
-        print("  WARNING: no Lotto Max data — keeping existing")
-        return existing
-
-    print(f"  total from site: {len(new_draws)}")
-    return _merge(new_draws, existing)
-
+    return _fetch_lc_game("lotto-max", 7, existing, num_years)
 
 def fetch_lotto_649(existing):
-    """
-    ca.lottonumbers.com/lotto-649/numbers/YYYY — static HTML, year archives.
-    """
+    print(f"  existing: {len(existing)} draws")
     num_years = 3 if len(existing) < 80 else 2
-    print(f"  fetching {num_years} year archives from ca.lottonumbers.com...")
-    new_draws = _fetch_lc_years("lotto-649", 6, num_years)
-
-    if not new_draws:
-        print("  WARNING: no Lotto 649 data — keeping existing")
-        return existing
-
-    print(f"  total from site: {len(new_draws)}")
-    return _merge(new_draws, existing)
-
+    return _fetch_lc_game("lotto-649", 6, existing, num_years)
 
 def fetch_daily_grand(existing):
     """
-    lotterycanada.com/daily-grand/past-draws — recent draws via static links.
-    Also tries ca.lottonumbers.com year archives.
+    Scrape lotterycanada.com/daily-grand/past-draws (server-side rendered links).
+    Also try ca.lottonumbers.com year archives.
     """
     new_draws = []
 
-    # Try lotterycanada.com (server-side rendered anchor tags with numbers)
+    # lotterycanada.com: recent draws in server-side-rendered anchor tags
     try:
         url = f"{LCCA_BASE}/daily-grand/past-draws"
         soup = _bs(_get(url).text)
@@ -170,32 +215,33 @@ def fetch_daily_grand(existing):
             date = pat.search(a["href"]).group(1)
             raw = re.findall(r"\d+", a.get_text(" ", strip=True))
             nums = [int(n) for n in raw if 1 <= int(n) <= 99]
-            # Format: "02 10 13 26 46 04" → 5 main + 1 grand
             if len(nums) >= 6:
                 new_draws.append([date, sorted(nums[-6:-1]), nums[-1]])
-        print(f"  {len(new_draws)} draws from lotterycanada.com/daily-grand")
+        print(f"  {len(new_draws)} draws from lotterycanada.com")
     except Exception as e:
-        print(f"  lotterycanada daily-grand error: {e}")
+        print(f"  lotterycanada.com error: {e}")
 
-    # Also try ca.lottonumbers.com year archives for daily-grand
-    try:
-        archive_draws = _fetch_lc_years("daily-grand", 5, 2)
-        new_draws.extend(archive_draws)
-        print(f"  total after ca.lottonumbers.com: {len(new_draws)}")
-    except Exception as e:
-        print(f"  ca.lottonumbers.com daily-grand error: {e}")
+    # Also try ca.lottonumbers.com daily-grand year archive
+    existing_map = {d[0]: d for d in existing}
+    current_year = datetime.utcnow().year
+    for year in [current_year, current_year - 1]:
+        try:
+            dates = _year_dates("daily-grand", year)
+            new_dates = [d for d in dates if d not in existing_map][:20]
+            for date_str in new_dates:
+                main, bonus = _draw_page("daily-grand", date_str, 5)
+                if main:
+                    new_draws.append([date_str, main, bonus or 0])
+                time.sleep(0.35)
+        except Exception as e:
+            print(f"  daily-grand {year} error: {e}")
 
     if not new_draws:
         return existing
-
     return _merge(new_draws, existing)
 
-
 def fetch_wclc(game_key, existing):
-    """
-    wclc.com print-mode pages — Western 649, Western Max.
-    Merges with existing to preserve history the print page no longer shows.
-    """
+    """WCLC print-mode pages for western games. Merges with existing history."""
     ball_count = {"western_649": 6, "western_max": 7}[game_key]
     url_map = {
         "western_649": f"{WCLC_BASE}/western-649-extra.htm"
@@ -234,7 +280,6 @@ def main():
     for key, fn in jobs.items():
         print(f"── {key} ──")
         draws = fn()
-        # Deduplicate by date, sort newest first
         seen, clean = set(), []
         for d in draws:
             if d[0] not in seen:
