@@ -103,6 +103,21 @@ body, .stApp, .stMarkdown, .stText, p, li, span, div,
 .stTabs [data-baseweb="tab"] { font-size:13px !important; font-weight:700 !important; color:#ffe44d !important; border-radius:8px 8px 0 0 !important; padding:8px 16px !important; }
 .stTabs [aria-selected="true"] { color:#00f0ff !important; border-bottom:2px solid #00f0ff !important; }
 .stSelectbox label, .stSlider label, .stRadio label { color:#ffe44d !important; font-weight:600 !important; }
+/* Selectbox dropdown listbox (renders in a portal, outside .stApp, so it needs its own rules) */
+div[role="listbox"] { background-color:#0d1b30 !important; border:1px solid rgba(0,240,255,0.25) !important; }
+div[role="listbox"] div[role="option"] {
+    background-color:#0d1b30 !important;
+    color:#ffe44d !important;
+}
+div[role="listbox"] div[role="option"]:hover,
+div[role="listbox"] div[role="option"][data-focused="true"] {
+    background-color:#1a3a6e !important;
+    color:#00f0ff !important;
+}
+div[role="listbox"] div[role="option"][aria-selected="true"] {
+    background-color:#12294a !important;
+    color:#00f0ff !important;
+}
 hr { border-color:rgba(0,240,255,0.1) !important; }
 .ball { display:inline-flex; align-items:center; justify-content:center; width:36px; height:36px; border-radius:50%; font-weight:900; font-size:13px; margin:2px; border:2px solid; }
 .ball-hot  { background:rgba(255,80,0,0.2);  border-color:#ff5000; color:#ff8040; }
@@ -110,6 +125,7 @@ hr { border-color:rgba(0,240,255,0.1) !important; }
 .ball-due  { background:rgba(255,200,0,0.2); border-color:#ffc800; color:#ffd840; }
 .ball-norm { background:rgba(0,240,255,0.1); border-color:#00f0ff; color:#80f0ff; }
 .ball-grand{ background:rgba(212,175,55,0.3);border-color:#d4af37; color:#f0d060; }
+.ball-match{ background:#00ff9d; border-color:#00ff9d; color:#04140c; box-shadow:0 0 10px rgba(0,255,157,0.7); }
 </style>
 """, unsafe_allow_html=True)
 
@@ -146,6 +162,108 @@ def save_scratch_cache(tickets, fetched_at):
 
 def load_scratch_cache():
     return json.load(open(SCRATCH_FILE)) if os.path.exists(SCRATCH_FILE) else None
+
+# ─────────────────────────────────────────────────────────────────────────────
+# GITHUB-BACKED PERSISTENT STORAGE
+# Streamlit Cloud's local disk is ephemeral (wiped on redeploy/restart), so
+# anything that needs to survive across sessions/devices — saved tickets,
+# email/SMS subscribers — is stored as a JSON file committed to the GitHub
+# repo itself via the Contents API. Falls back to session-only storage if no
+# GITHUB_TOKEN secret is configured, so the app still works without setup.
+# ─────────────────────────────────────────────────────────────────────────────
+GITHUB_REPO   = "ranslu/lotto-oracle"
+GITHUB_BRANCH = "main"
+
+def _github_token():
+    try:
+        return st.secrets.get("GITHUB_TOKEN", "")
+    except Exception:
+        return ""
+
+def github_storage_available():
+    return bool(_github_token())
+
+def load_github_json(path, default):
+    """Read a JSON file from the repo. Falls back to session_state cache."""
+    token = _github_token()
+    cache_key = f"_ghcache_{path}"
+    if not token:
+        return st.session_state.get(cache_key, default)
+    try:
+        url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{path}?ref={GITHUB_BRANCH}"
+        headers = {"Authorization": f"token {token}", "Accept": "application/vnd.github+json"}
+        r = requests.get(url, headers=headers, timeout=10)
+        if r.status_code == 200:
+            payload = r.json()
+            import base64
+            content = base64.b64decode(payload["content"]).decode("utf-8")
+            data = json.loads(content)
+            st.session_state[cache_key] = data
+            st.session_state[f"_ghsha_{path}"] = payload["sha"]
+            return data
+        elif r.status_code == 404:
+            return default
+        else:
+            return st.session_state.get(cache_key, default)
+    except Exception:
+        return st.session_state.get(cache_key, default)
+
+def save_github_json(path, data, message):
+    """Write a JSON file to the repo, creating or updating as needed.
+    Returns (success: bool, detail: str)."""
+    token = _github_token()
+    cache_key = f"_ghcache_{path}"
+    st.session_state[cache_key] = data
+    if not token:
+        return False, "No GITHUB_TOKEN configured — saved locally to this session only."
+    try:
+        import base64
+        headers = {"Authorization": f"token {token}", "Accept": "application/vnd.github+json"}
+        url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{path}"
+        sha = st.session_state.get(f"_ghsha_{path}")
+        if sha is None:
+            r = requests.get(f"{url}?ref={GITHUB_BRANCH}", headers=headers, timeout=10)
+            if r.status_code == 200:
+                sha = r.json()["sha"]
+        body = {
+            "message": message,
+            "content": base64.b64encode(json.dumps(data, indent=2).encode("utf-8")).decode("utf-8"),
+            "branch": GITHUB_BRANCH,
+        }
+        if sha:
+            body["sha"] = sha
+        r = requests.put(url, headers=headers, json=body, timeout=10)
+        if r.status_code in (200, 201):
+            st.session_state[f"_ghsha_{path}"] = r.json()["content"]["sha"]
+            return True, "Saved."
+        return False, f"GitHub API error {r.status_code}: {r.text[:200]}"
+    except Exception as e:
+        return False, f"Save failed: {e}"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ODDS CALCULATOR (real hypergeometric probability — not marketing "AI")
+# ─────────────────────────────────────────────────────────────────────────────
+def match_odds(pool, balls_per_draw, k):
+    """Probability of matching exactly k of your chosen numbers in one draw,
+    using the hypergeometric distribution: pick balls_per_draw numbers from a
+    pool of `pool`; the draw also picks balls_per_draw. This is exact math,
+    not a model — every combination is equally likely, always."""
+    if k > balls_per_draw or k < 0:
+        return 0.0
+    total = math.comb(pool, balls_per_draw)
+    if total == 0:
+        return 0.0
+    favorable = math.comb(balls_per_draw, k) * math.comb(pool - balls_per_draw, balls_per_draw - k)
+    return favorable / total
+
+def odds_table(pool, balls_per_draw):
+    """Returns list of (k, probability, 1-in-X) for k = balls_per_draw down to 0."""
+    rows = []
+    for k in range(balls_per_draw, -1, -1):
+        p = match_odds(pool, balls_per_draw, k)
+        one_in = (1 / p) if p > 0 else float("inf")
+        rows.append((k, p, one_in))
+    return rows
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
@@ -920,6 +1038,52 @@ def render_balls(nums, freq_map=None, draws_since=None, pool=None, ht=None, ct=N
         html+=f"<span class='ball {cls}'>{n:02d}</span>"
     return html
 
+def render_ticket_balls(nums, matched_set=None):
+    """Render a saved ticket's numbers, highlighting any that matched a draw."""
+    matched_set = matched_set or set()
+    html=""
+    for n in nums:
+        cls = "ball-match" if n in matched_set else "ball-norm"
+        html+=f"<span class='ball {cls}'>{n:02d}</span>"
+    return html
+
+def check_ticket_against_draws(ticket_nums, ticket_bonus, df, game_key):
+    """Compare a saved ticket against every loaded draw for its game.
+    Returns list of dicts, most recent first, each with match count/prize tier."""
+    results = []
+    tnums = set(ticket_nums)
+    for _, row in df.sort_values("date", ascending=False).iterrows():
+        dnums = set(row["numbers"])
+        matched = tnums & dnums
+        bonus_hit = (ticket_bonus is not None and ticket_bonus == row["bonus"])
+        results.append({
+            "date": row["date"],
+            "matched": matched,
+            "match_count": len(matched),
+            "bonus_hit": bonus_hit,
+            "draw_numbers": row["numbers"],
+            "draw_bonus": row["bonus"],
+        })
+    return results
+
+def best_ticket_result(ticket_nums, ticket_bonus, df, game_key):
+    """Return the single best (highest-match) result for a ticket across all draws."""
+    results = check_ticket_against_draws(ticket_nums, ticket_bonus, df, game_key)
+    if not results:
+        return None
+    return max(results, key=lambda r: (r["match_count"], r["bonus_hit"]))
+
+PRIZE_TIER_LABELS = {
+    "lotto_max":   {7:"🎉 JACKPOT (7/7)", 6:"6/7 — major prize", 5:"5/7 — solid win", 4:"4/7 — small win", 3:"3/7 — free play"},
+    "lotto_649":   {6:"🎉 JACKPOT (6/6)", 5:"5/6 — major prize", 4:"4/6 — small win", 3:"3/6 — free play"},
+    "western_649": {6:"🎉 JACKPOT (6/6)", 5:"5/6 — major prize", 4:"4/6 — small win", 3:"3/6 — free play"},
+    "western_max": {7:"🎉 JACKPOT (7/7)", 6:"6/7 — major prize", 5:"5/7 — solid win", 4:"4/7 — small win", 3:"3/7 — free play"},
+    "daily_grand": {5:"🎉 JACKPOT (5/5)", 4:"4/5 — solid win", 3:"3/5 — small win"},
+}
+
+def prize_tier_label(game_key, match_count):
+    return PRIZE_TIER_LABELS.get(game_key, {}).get(match_count, f"{match_count} matched — no prize")
+
 # ════════════════════════════════════════════════════════════════════════════════
 # HEADER
 # ════════════════════════════════════════════════════════════════════════════════
@@ -966,7 +1130,7 @@ st.markdown(
     f"{' + Grand Number 1–7' if game_key=='daily_grand' else ''}"
     f" &nbsp;·&nbsp; Draws: {ginfo['draws']}</span></div>",unsafe_allow_html=True)
 
-p1,p2,p3,p4,p5,p6=st.columns(6)
+p1,p2,p3,p4,p5,p6,p7=st.columns(7)
 with p1:
     if st.button("📊 Dashboard",   use_container_width=True): st.session_state["pg"]="d"
 with p2:
@@ -974,10 +1138,12 @@ with p2:
 with p3:
     if st.button("🔬 Research",    use_container_width=True): st.session_state["pg"]="r"
 with p4:
-    if st.button("🏆 Winners",     use_container_width=True): st.session_state["pg"]="w"
+    if st.button("🎟️ My Tickets",  use_container_width=True): st.session_state["pg"]="t"
 with p5:
-    if st.button("🎫 Scratch Hub", use_container_width=True): st.session_state["pg"]="s"
+    if st.button("🏆 Winners",     use_container_width=True): st.session_state["pg"]="w"
 with p6:
+    if st.button("🎫 Scratch Hub", use_container_width=True): st.session_state["pg"]="s"
+with p7:
     if st.button("⚙️ Settings",    use_container_width=True): st.session_state["pg"]="x"
 
 st.divider()
@@ -1455,6 +1621,122 @@ elif pg=="r":
         st.markdown(f"Last seen: **{ai.iloc[0]['date'].strftime('%B %d, %Y')}**")
         st.dataframe(ai[["date","numbers","bonus"]].rename(columns={"date":"Date","numbers":"Numbers","bonus":"Bonus"}).head(10),
                      use_container_width=True,hide_index=True)
+
+# ════════════════════════════════════════════════════════════════════════════════
+# MY TICKETS — save picks, auto-check against every draw, real odds math
+# ════════════════════════════════════════════════════════════════════════════════
+elif pg=="t":
+    st.markdown(f"<h2 style='color:#00ff9d;font-weight:900;text-shadow:0 0 10px rgba(0,255,157,0.4);'>🎟️ {ginfo['name']} — My Tickets</h2>",unsafe_allow_html=True)
+
+    if not github_storage_available():
+        st.warning("💾 Saved tickets persist for this session only. To keep them across visits/devices, add a `GITHUB_TOKEN` secret in your Streamlit Cloud app settings (a fine-grained GitHub Personal Access Token with **Contents: Read & write** on this repo).")
+
+    tickets_data = load_github_json("saved_tickets.json", {"tickets": []})
+    all_tickets = tickets_data.get("tickets", [])
+    game_tickets = [t for t in all_tickets if t.get("game") == game_key]
+
+    # ── Add a new ticket ──────────────────────────────────────────────────────
+    st.markdown("<h3 style='color:#ffc940;font-weight:800;'>➕ Save a Ticket</h3>",unsafe_allow_html=True)
+    with st.form(key=f"add_ticket_{game_key}", clear_on_submit=True):
+        picked = st.multiselect(
+            f"Pick your {balls_per_draw} numbers (1–{pool})",
+            options=list(range(1,pool+1)),
+            max_selections=balls_per_draw,
+        )
+        bonus_pick = None
+        if game_key == "daily_grand":
+            bonus_pick = st.number_input("Grand Number (1–7)", min_value=1, max_value=7, value=1, step=1)
+        else:
+            include_bonus = st.checkbox("Also track a bonus number")
+            if include_bonus:
+                bonus_pick = st.number_input("Bonus Number", min_value=1, max_value=pool, value=1, step=1)
+        nickname = st.text_input("Nickname (optional)", placeholder="e.g. \"Birthday numbers\"")
+        submitted = st.form_submit_button("💾 Save Ticket", type="primary", use_container_width=True)
+        if submitted:
+            if len(picked) != balls_per_draw:
+                st.error(f"Pick exactly {balls_per_draw} numbers before saving.")
+            else:
+                new_ticket = {
+                    "id": f"{game_key}_{int(datetime.now().timestamp())}",
+                    "game": game_key,
+                    "numbers": sorted(picked),
+                    "bonus": int(bonus_pick) if bonus_pick is not None else None,
+                    "nickname": nickname.strip(),
+                    "added": datetime.now().strftime("%Y-%m-%d %H:%M"),
+                }
+                all_tickets.append(new_ticket)
+                ok, detail = save_github_json("saved_tickets.json", {"tickets": all_tickets},
+                                               f"Add saved ticket ({ginfo['name']})")
+                if ok: st.success("✅ Ticket saved and synced to GitHub.")
+                else: st.info(f"💾 Ticket saved for this session. {detail}")
+                st.rerun()
+
+    st.markdown("---")
+
+    # ── Saved tickets + auto-check against every loaded draw ────────────────
+    st.markdown(f"<h3 style='color:#00f0ff;font-weight:800;'>📋 Saved {ginfo['name']} Tickets ({len(game_tickets)})</h3>",unsafe_allow_html=True)
+
+    if not game_tickets:
+        st.caption("No saved tickets yet for this game. Add one above — it'll be automatically checked against every draw on file.")
+    else:
+        wins = 0
+        for t in sorted(game_tickets, key=lambda x: x["added"], reverse=True):
+            best = best_ticket_result(t["numbers"], t.get("bonus"), df, game_key)
+            label = t.get("nickname") or "Unnamed ticket"
+            if best:
+                mc = best["match_count"]
+                tier = prize_tier_label(game_key, mc)
+                is_win = mc >= 3
+                if is_win: wins += 1
+                border = "#00ff9d" if is_win else "#2a5298"
+                bh = render_ticket_balls(t["numbers"], best["matched"])
+                bonus_line = ""
+                if t.get("bonus") is not None:
+                    hit = "✅" if best["bonus_hit"] else "—"
+                    bonus_line = f"<div style='font-size:11px;color:#7a9abf;margin-top:4px;'>Bonus {t['bonus']:02d}: {hit}</div>"
+                st.markdown(
+                    f"<div style='background:rgba(0,10,30,0.5);border:1px solid {border};border-left:4px solid {border};"
+                    f"border-radius:10px;padding:14px 16px;margin-bottom:10px;'>"
+                    f"<div style='display:flex;justify-content:space-between;align-items:center;'>"
+                    f"<span style='color:#ffe44d;font-weight:800;font-size:13px;'>{label}</span>"
+                    f"<span style='color:{border};font-weight:800;font-size:11px;'>{tier}</span></div>"
+                    f"<div style='margin:8px 0 4px;'>{bh}</div>"
+                    f"<div style='font-size:11px;color:#6a9abf;'>Best match: {best['date'].strftime('%b %d, %Y')} · Saved {t['added']}</div>"
+                    f"{bonus_line}"
+                    f"</div>", unsafe_allow_html=True)
+            else:
+                st.caption(f"{label}: no draws loaded yet to check against.")
+
+        if game_tickets:
+            st.caption(f"🟢 {wins} of {len(game_tickets)} saved tickets have matched 3+ numbers in at least one loaded draw.")
+
+        del_options = {f"{t.get('nickname') or 'Unnamed'} — {' '.join(f'{n:02d}' for n in t['numbers'])}": t["id"] for t in game_tickets}
+        to_delete = st.selectbox("Remove a ticket", ["—"] + list(del_options.keys()))
+        if to_delete != "—" and st.button("🗑️ Delete Selected Ticket", use_container_width=True):
+            remaining = [t for t in all_tickets if t["id"] != del_options[to_delete]]
+            ok, detail = save_github_json("saved_tickets.json", {"tickets": remaining}, "Remove saved ticket")
+            st.success("Deleted.") if ok else st.info(f"Deleted for this session. {detail}")
+            st.rerun()
+
+    st.markdown("---")
+
+    # ── Real odds calculator (hypergeometric — exact math, no modeling) ─────
+    st.markdown("<h3 style='color:#d4af37;font-weight:800;'>🎲 Real Odds Calculator</h3>",unsafe_allow_html=True)
+    st.caption(f"Exact probabilities for {ginfo['name']} — {balls_per_draw} numbers drawn from a pool of {pool}. "
+               "Every combination is equally likely; no analysis changes these numbers.")
+    rows = odds_table(pool, balls_per_draw)
+    for k, p, one_in in rows:
+        if k < 2: continue  # skip near-certain low tiers, not interesting
+        pct = p*100
+        one_in_str = f"1 in {one_in:,.0f}" if one_in != float("inf") else "—"
+        bar_w = min(100, max(1, pct*8))
+        st.markdown(
+            f"<div style='display:flex;align-items:center;margin:4px 0;'>"
+            f"<span style='color:#ffc940;font-weight:700;width:70px;font-size:12px;'>{k}/{balls_per_draw} match</span>"
+            f"<div style='background:#0a1428;border-radius:4px;flex:1;height:14px;margin:0 8px;overflow:hidden;'>"
+            f"<div style='background:linear-gradient(90deg,#00f0ff,#d4af37);height:100%;width:{bar_w}%;'></div></div>"
+            f"<span style='color:#7a9abf;font-size:11px;width:110px;text-align:right;'>{one_in_str}</span>"
+            f"</div>", unsafe_allow_html=True)
 
 # ════════════════════════════════════════════════════════════════════════════════
 # WINNERS
