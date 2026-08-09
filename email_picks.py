@@ -89,15 +89,25 @@ def generate_picks(draws, balls, max_num):
 # ── HTML builder ──────────────────────────────────────────────────────────────
 
 def ball_html(num, color):
+    # Table-based circle: div/span border-radius circles collapse in some email
+    # clients (Outlook desktop). A fixed-size table cell renders reliably everywhere.
     return (
-        f'<span style="display:inline-flex;align-items:center;justify-content:center;'
-        f'width:36px;height:36px;border-radius:50%;background:{color};color:#fff;'
-        f'font-weight:700;font-size:14px;margin:3px;">{num:02d}</span>'
+        f'<table role="presentation" cellpadding="0" cellspacing="0" border="0" '
+        f'style="display:inline-table;margin:4px;">'
+        f'<tr><td width="48" height="48" align="center" valign="middle" '
+        f'style="width:48px;height:48px;border-radius:50%;background:{color};'
+        f'color:#ffffff;font-weight:800;font-size:19px;font-family:Arial,sans-serif;'
+        f'line-height:48px;text-align:center;">{num:02d}</td></tr>'
+        f'</table>'
     )
 
 def picks_row(label, nums, color):
     balls = "".join(ball_html(n, color) for n in nums)
-    return f'<tr><td style="padding:4px 10px;color:#555;font-size:13px;">{label}</td><td>{balls}</td></tr>'
+    return (
+        f'<tr><td style="padding:8px 10px;color:#374151;font-size:15px;'
+        f'font-weight:700;white-space:nowrap;">{label}</td>'
+        f'<td style="padding:4px 0;">{balls}</td></tr>'
+    )
 
 def game_section(game_key, cfg, draws):
     if not draws:
