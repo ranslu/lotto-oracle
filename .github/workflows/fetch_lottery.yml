@@ -12,9 +12,9 @@ jobs:
   fetch-and-email:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: '3.11'
 
@@ -25,7 +25,7 @@ jobs:
         run: python fetch_lottery.py
 
       - name: Commit updated data
-        uses: stefanzweifel/git-auto-commit-action@v5
+        uses: stefanzweifel/git-auto-commit-action@v6
         with:
           commit_message: "chore: auto-update lottery data [skip ci]"
           file_pattern: lottery_data.json
