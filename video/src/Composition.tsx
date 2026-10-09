@@ -5,11 +5,14 @@ import {
   Composition,
   Easing,
   interpolate,
+  Sequence,
   Series,
   spring,
+  staticFile,
   useCurrentFrame,
   useVideoConfig,
 } from "remotion";
+import { Audio } from "@remotion/media";
 import picks from "./picks.json";
 
 type Props = {};
@@ -19,7 +22,8 @@ const INTRO = 60;
 const LAST = 100;
 const TICKET = 130;
 const OUTRO = 75;
-const TOTAL = INTRO + LAST + TICKET * picks.tickets.length + OUTRO;
+const GAME = LAST + TICKET * 2;
+const TOTAL = INTRO + GAME * picks.games.length + OUTRO;
 
 const calculateMetadata: CalculateMetadataFunction<Props> = () => {
   return {};
@@ -65,6 +69,9 @@ const Ball: React.FC<{ n: number; color: string; delay: number; size?: number }>
         transform: `scale(${s}) rotate(${spin}deg)`,
       }}
     >
+      <Sequence from={delay} durationInFrames={10} layout="none">
+        <Audio src={staticFile("pop.wav")} volume={0.45} />
+      </Sequence>
       <div
         style={{
           width: size * 0.58,
@@ -155,11 +162,35 @@ const Background: React.FC = () => {
   );
 };
 
+const GameTag: React.FC<{ game: string; color: string }> = ({ game, color }) => (
+  <div
+    style={{
+      fontSize: 48,
+      fontWeight: 800,
+      color,
+      letterSpacing: 4,
+      textTransform: "uppercase",
+      marginBottom: 20,
+    }}
+  >
+    {game}
+  </div>
+);
+
 export const MyComponent: React.FC<Props> = () => {
-  const { lastDraw, tickets, game } = picks;
+  const { fps } = useVideoConfig();
   return (
     <AbsoluteFill>
       <Background />
+      <Audio
+        src={staticFile("music.wav")}
+        volume={(f) =>
+          interpolate(f, [0, fps, TOTAL - fps, TOTAL], [0, 0.6, 0.6, 0], {
+            extrapolateLeft: "clamp",
+            extrapolateRight: "clamp",
+          })
+        }
+      />
       <Series>
         <Series.Sequence durationInFrames={INTRO}>
           <Scene>
@@ -167,33 +198,37 @@ export const MyComponent: React.FC<Props> = () => {
               <Title size={140}>🔮 Lotto Oracle</Title>
             </FadeIn>
             <FadeIn delay={12}>
-              <Sub>{game} picks for the next draw</Sub>
+              <Sub>{picks.games.map((g) => g.game).join(" + ")} picks</Sub>
             </FadeIn>
           </Scene>
         </Series.Sequence>
-        <Series.Sequence durationInFrames={LAST}>
-          <Scene>
-            <FadeIn>
-              <Title size={96}>Last draw</Title>
-              <Sub>{lastDraw.date}</Sub>
-            </FadeIn>
-            <Balls nums={lastDraw.nums} color="#9b8cff" start={10} size={170} />
-            <FadeIn delay={70}>
-              <Sub>Bonus: {lastDraw.bonus}</Sub>
-            </FadeIn>
-          </Scene>
-        </Series.Sequence>
-        {tickets.map((t) => (
-          <Series.Sequence key={t.label} durationInFrames={TICKET}>
+        {picks.games.flatMap(({ game, color, lastDraw, tickets }) => [
+          <Series.Sequence key={`${game}-last`} durationInFrames={LAST}>
             <Scene>
               <FadeIn>
-                <Title color={t.color}>{t.label}</Title>
-                <Sub>{t.sub}</Sub>
+                <GameTag game={game} color={color} />
+                <Title size={96}>Last draw</Title>
+                <Sub>{lastDraw.date}</Sub>
               </FadeIn>
-              <Balls nums={t.nums} color={t.color} start={15} />
+              <Balls nums={lastDraw.nums} color={color} start={10} size={170} />
+              <FadeIn delay={70}>
+                <Sub>Bonus: {lastDraw.bonus}</Sub>
+              </FadeIn>
             </Scene>
-          </Series.Sequence>
-        ))}
+          </Series.Sequence>,
+          ...tickets.map((t) => (
+            <Series.Sequence key={`${game}-${t.label}`} durationInFrames={TICKET}>
+              <Scene>
+                <FadeIn>
+                  <GameTag game={game} color={color} />
+                  <Title color={t.color}>{t.label}</Title>
+                  <Sub>{t.sub}</Sub>
+                </FadeIn>
+                <Balls nums={t.nums} color={t.color} start={15} />
+              </Scene>
+            </Series.Sequence>
+          )),
+        ])}
         <Series.Sequence durationInFrames={OUTRO}>
           <Scene>
             <FadeIn>

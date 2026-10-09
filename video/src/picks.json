@@ -1,46 +1,95 @@
 {
-  "game": "Lotto Max",
-  "lastDraw": {
-    "date": "2026-10-06",
-    "nums": [
-      11,
-      12,
-      22,
-      31,
-      32,
-      46,
-      50
-    ],
-    "bonus": 7
-  },
-  "tickets": [
+  "games": [
     {
-      "label": "Hot Streak",
-      "sub": "Most drawn in last 50 draws",
-      "nums": [
-        6,
-        11,
-        12,
-        35,
-        41,
-        43,
-        49
-      ],
-      "color": "#ffc940"
+      "game": "Lotto Max",
+      "color": "#9b8cff",
+      "lastDraw": {
+        "date": "2026-10-06",
+        "nums": [
+          11,
+          12,
+          22,
+          31,
+          32,
+          46,
+          50
+        ],
+        "bonus": 7
+      },
+      "tickets": [
+        {
+          "label": "Hot Streak",
+          "sub": "Most drawn in last 50 draws",
+          "nums": [
+            6,
+            11,
+            12,
+            35,
+            41,
+            43,
+            49
+          ],
+          "color": "#ffc940"
+        },
+        {
+          "label": "Overdue Oracle",
+          "sub": "Absent the longest",
+          "nums": [
+            3,
+            9,
+            16,
+            21,
+            27,
+            29,
+            33
+          ],
+          "color": "#00f0ff"
+        }
+      ]
     },
     {
-      "label": "Overdue Oracle",
-      "sub": "Absent the longest",
-      "nums": [
-        3,
-        9,
-        16,
-        21,
-        27,
-        29,
-        33
-      ],
-      "color": "#00f0ff"
+      "game": "Lotto 6/49",
+      "color": "#ff6b8b",
+      "lastDraw": {
+        "date": "2026-10-07",
+        "nums": [
+          3,
+          8,
+          11,
+          20,
+          33,
+          49
+        ],
+        "bonus": 14
+      },
+      "tickets": [
+        {
+          "label": "Hot Streak",
+          "sub": "Most drawn in last 50 draws",
+          "nums": [
+            9,
+            14,
+            33,
+            37,
+            42,
+            45
+          ],
+          "color": "#ffc940"
+        },
+        {
+          "label": "Overdue Oracle",
+          "sub": "Absent the longest",
+          "nums": [
+            15,
+            22,
+            29,
+            36,
+            40,
+            44
+          ],
+          "color": "#00f0ff"
+        }
+      ]
     }
   ]
 }
