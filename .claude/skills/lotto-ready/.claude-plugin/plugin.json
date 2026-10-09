@@ -1,0 +1,6 @@
+{
+  "name": "lotto-ready",
+  "version": "0.1.0",
+  "description": "Standby readiness alert: flags when lottery_data.json is behind the draw schedule, with one-click refresh.",
+  "types": "./types/index.d.ts"
+}
