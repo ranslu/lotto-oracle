@@ -1,4 +1,5 @@
 import streamlit as st
+import streamlit.components.v1 as components
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
@@ -1103,6 +1104,18 @@ border-radius:10px;padding:10px 20px;color:#fff;font-size:13px;font-weight:800;
 letter-spacing:1px;box-shadow:0 0 12px rgba(0,100,200,0.4);'>🎰 PLAY ALBERTA</div></a>
 </div>
 """, unsafe_allow_html=True)
+
+# Animated dot-matrix banner (Hairline "phosphor" figure, loaded from CDN)
+components.html("""
+<div id="hl" style="width:220px;margin:0 auto;
+  --hairline-plate:#060e1a;--hairline-hi:#00f0ff;--hairline-edge:#ffe44d;
+  --hairline-mid:#1a5f7a;--hairline-lo:#0d2a40;"></div>
+<script type="module">
+import { phosphor } from "https://cdn.jsdelivr.net/npm/@lucasmarkes/hairline@0.5.0/+esm";
+phosphor(document.getElementById("hl"), { theme: "dark", intensity: 0.7, play: true, label: "Lotto Oracle dot-matrix banner" });
+</script>
+<style>html,body{margin:0;background:#060e1a;}</style>
+""", height=185)
 
 st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
 
