@@ -16,6 +16,7 @@ Installs go into **Claude Code / Claude Desktop** on your machine, not a chat or
 - User scope (`--scope user`): Context7, Chrome DevTools, Serena.
 - Per project: DBHub (DSN), shadcn (`components.json`).
 - Recommended default: Context7 + shadcn now; add the rest when a project needs them.
+- Option B installer: `install-option-b.ps1` in this folder (`powershell -ExecutionPolicy Bypass -File .\install-option-b.ps1 [-ProjectPath <root>]`).
 - Software cost $0; real cost is extra tokens per tool call.
 
 ## 1. Context7 (Upstash) — current library docs
