@@ -7,6 +7,7 @@ from collections import Counter
 from itertools import combinations
 import random, json, os, math
 from datetime import datetime
+from blend import ASTRO_LUCKY, NUMEROLOGY_MASTER, ASTRO_WEIGHTS, blend_scores, top_blended, weighted_pick
 
 try:
     import requests
@@ -283,21 +284,6 @@ GAMES = {
     "daily_grand": {"name":"Daily Grand", "emoji":"👑","balls":5,"pool":49,"draws":"Mon & Thu","color":"#d4af37","grand_pool":7},
 }
 
-ASTRO_LUCKY = {
-    1: {"sign":"Capricorn",   "nums":[4,8,13,17,22,26,31,35,40,44,49]},
-    2: {"sign":"Aquarius",    "nums":[7,11,16,20,25,29,34,38,43,47,2]},
-    3: {"sign":"Pisces",      "nums":[3,7,12,16,21,25,30,34,39,43,48]},
-    4: {"sign":"Aries",       "nums":[9,14,18,23,27,32,36,41,45,5,19]},
-    5: {"sign":"Taurus",      "nums":[6,10,15,19,24,28,33,37,42,46,1]},
-    6: {"sign":"Gemini",      "nums":[5,9,14,18,23,27,32,36,41,45,50]},
-    7: {"sign":"Cancer",      "nums":[2,7,11,16,20,25,29,34,38,43,47]},
-    8: {"sign":"Leo",         "nums":[1,6,10,15,19,24,28,33,37,42,46]},
-    9: {"sign":"Virgo",       "nums":[8,13,17,22,26,31,35,40,44,49,4]},
-   10: {"sign":"Libra",       "nums":[6,11,15,20,24,29,33,38,42,47,3]},
-   11: {"sign":"Scorpio",     "nums":[9,13,18,22,27,31,36,40,45,49,8]},
-   12: {"sign":"Sagittarius", "nums":[3,8,12,17,21,26,30,35,39,44,48]},
-}
-NUMEROLOGY_MASTER = [11,22,33]
 
 def get_moon_phase_label():
     phase_day = datetime.now().timetuple().tm_yday % 29
@@ -325,13 +311,19 @@ def get_astro_lucky_nums(pool, count, month=None):
 
 def build_oracle_tickets(freq_map, draws_since, pool, balls):
     pool_list = list(range(1,pool+1))
-    overdue_sorted = sorted(draws_since.items(), key=lambda x:x[1], reverse=True)
-    t1 = sorted([n for n,_ in overdue_sorted if 1<=n<=pool][:balls])
-    t1_reason = (f"These {balls} numbers have been absent the longest. "
-                 f"Most overdue: **{t1[0]}** ({draws_since.get(t1[0],0)} draws ago). "
-                 "Regression theory suggests they are primed to appear.")
+    month = datetime.now().month
+    blend = blend_scores(freq_map, draws_since, pool, month)   # shared score: popular+overdue+monthly lucky+astro
+    mx_due = max(draws_since.values(), default=1) or 1
+    mx_f   = max(freq_map.values(),   default=1) or 1
+    od_rank = sorted(((n, 0.5*draws_since.get(n,0)/mx_due + 0.5*blend[n]) for n in pool_list),
+                     key=lambda x:x[1], reverse=True)
+    t1 = sorted([n for n,_ in od_rank][:balls])
+    top_od = max(t1, key=lambda n: draws_since.get(n,0))
+    t1_reason = (f"Longest-absent numbers, tie-broken by the blended score (popular + overdue + monthly lucky + astro). "
+                 f"Most overdue: **{top_od}** ({draws_since.get(top_od,0)} draws ago).")
     sf = sorted(freq_map.items(), key=lambda x:x[1], reverse=True)
-    hot = [n for n,_ in sf[:12] if 1<=n<=pool]
+    hot = [n for n,_ in sorted(((n, 0.5*f/mx_f + 0.5*blend.get(n,0)) for n,f in sf if 1<=n<=pool),
+                               key=lambda x:x[1], reverse=True)[:12]]
     cold= [n for n,_ in sf[-12:] if 1<=n<=pool]
     hp  = sorted(random.sample(hot,  min(balls//2+1, len(hot))))
     cp  = sorted(random.sample(cold, min(balls-len(hp), len(cold))))
@@ -341,13 +333,18 @@ def build_oracle_tickets(freq_map, draws_since, pool, balls):
         t2=sorted(t2+ex[:balls-len(t2)])
     t2_reason=(f"Blend of **{balls//2+1} hottest** and **{balls-balls//2-1} coldest** numbers. "
                "Hot numbers ride momentum; cold numbers are statistically overdue.")
-    t3 = get_astro_lucky_nums(pool, balls)
-    sign=ASTRO_LUCKY[datetime.now().month]["sign"]; moon=get_moon_phase_label()
-    t3_reason=(f"Guided by **{sign}** lucky numbers + numerology master numbers. "
+    t3 = weighted_pick(blend_scores(freq_map, draws_since, pool, month, ASTRO_WEIGHTS), balls)
+    sign=ASTRO_LUCKY[month]["sign"]; moon=get_moon_phase_label()
+    t3_reason=(f"Guided by **{sign}** lucky numbers + numerology master numbers, weighted by the blended score. "
                f"Current phase: {moon}. Cosmic patterns meet number mysticism! 🌙")
+    t4 = top_blended(blend, balls)
+    pool10 = top_blended(blend, 10)
+    t4_reason=(f"Top-scoring numbers across popular, overdue, **{sign}** monthly lucky and astro/numerology. "
+               f"Top-10 pool: **{' · '.join(f'{n:02d}' for n in sorted(pool10))}**")
     return [{"label":"🕰️ Overdue Oracle","nums":t1,"reason":t1_reason,"color":"#00f0ff"},
             {"label":"🔥❄️ Hot/Cold Fusion","nums":t2,"reason":t2_reason,"color":"#ffc940"},
-            {"label":"🌙 Astro-Numerology","nums":t3,"reason":t3_reason,"color":"#d4af37"}]
+            {"label":"🌙 Astro-Numerology","nums":t3,"reason":t3_reason,"color":"#d4af37"},
+            {"label":"🎯 Blended Consensus","nums":sorted(t4),"reason":t4_reason,"color":"#00ff9d"}]
 
 def _parse_date_multi(txt):
     for fmt in ["%A, %B %d, %Y","%B %d, %Y","%B %d %Y",
@@ -1239,7 +1236,7 @@ elif pg=="o":
         f"{df_win['date'].min().strftime('%b %d, %Y')} → {df_win['date'].max().strftime('%b %d, %Y')}</span>"
         f"</div>",unsafe_allow_html=True)
 
-    st.markdown("<h3 style='color:#00f0ff;font-weight:800;'>🔮 Oracle's 3 Best Ticket Suggestions</h3>",unsafe_allow_html=True)
+    st.markdown("<h3 style='color:#00f0ff;font-weight:800;'>🔮 Oracle's 4 Best Ticket Suggestions</h3>",unsafe_allow_html=True)
     st.caption("⚠️ Best-guess only — based on statistics, astrology & numerology. Lottery draws are random. Play responsibly.")
     oracle_tickets=build_oracle_tickets(win_freq_map,win_draws_since,pool,balls_per_draw)
     for tk in oracle_tickets:
@@ -1258,7 +1255,7 @@ elif pg=="o":
 
     st.markdown("---")
     st.markdown("<h3 style='color:#ffc940;font-weight:800;'>⚡ Custom Ticket Generator</h3>",unsafe_allow_html=True)
-    strategy=st.selectbox("Strategy",["Balanced","Hot Numbers","Due Numbers","Cold Numbers","Random"])
+    strategy=st.selectbox("Strategy",["Blended","Balanced","Hot Numbers","Due Numbers","Cold Numbers","Random"])
     num_tickets=st.slider("Tickets to Generate",1,8,4)
     sum_min,sum_max=st.slider("Target Sum Range",10,500,(int(np.mean(win_sums)*0.8),int(np.mean(win_sums)*1.2)))
     odd_opts=["Any"]+[f"{k}O/{balls_per_draw-k}E" for k in range(balls_per_draw+1)]
@@ -1266,8 +1263,10 @@ elif pg=="o":
 
     def pick_ticket(strat,s_min,s_max,ot):
         pool_list=list(range(1,pool+1))
+        bsc=blend_scores(win_freq_map,win_draws_since,pool)
         for _ in range(500):
-            if strat=="Hot Numbers":    w=[win_freq_map.get(n,1)**2 for n in pool_list]
+            if strat=="Blended":        w=[bsc[n]+0.05 for n in pool_list]
+            elif strat=="Hot Numbers":  w=[win_freq_map.get(n,1)**2 for n in pool_list]
             elif strat=="Due Numbers":  w=[win_draws_since.get(n,1)**2 for n in pool_list]
             elif strat=="Cold Numbers": mx=max(win_freq_map.values()); w=[mx-win_freq_map.get(n,0)+1 for n in pool_list]
             elif strat=="Balanced":

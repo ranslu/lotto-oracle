@@ -8,6 +8,7 @@ from datetime import datetime, timedelta
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from collections import Counter
+from blend import ASTRO_WEIGHTS, blend_scores, top_blended, weighted_pick
 
 GMAIL_ADDRESS    = os.environ["GMAIL_ADDRESS"]
 GMAIL_APP_PASS   = os.environ["GMAIL_APP_PASSWORD"]
@@ -71,19 +72,21 @@ def generate_picks(draws, balls, max_num):
         set2 += random.sample(pad, balls - len(set2))
         set2 = sorted(set2)
 
-    # Lucky: weighted random (higher freq = slightly higher weight)
-    weights = [freq.get(n, 0) + 1 for n in universe]
-    set3 = sorted(random.sample(
-        random.choices(universe, weights=weights, k=balls * 4)[:balls * 2],
-        min(balls, balls * 2)
-    ))
-    set3 = sorted(list(dict.fromkeys(set3)))[:balls]
-    if len(set3) < balls:
-        pad = [n for n in universe if n not in set3]
-        set3 += random.sample(pad, balls - len(set3))
-        set3 = sorted(set3)
+    # Shared blended score: popular + overdue + monthly lucky + astro/numerology
+    ordered = sorted(draws, key=lambda d: d[0], reverse=True)       # newest first
+    draws_since = {}
+    for n in universe:
+        draws_since[n] = next((i for i, d in enumerate(ordered) if n in d[1]), len(ordered))
+    blend = blend_scores(freq, draws_since, max_num)
 
-    return set1, set2, set3
+    # Lucky: astro/monthly-lucky weighted pick
+    set3 = weighted_pick(blend_scores(freq, draws_since, max_num, weights=ASTRO_WEIGHTS), balls)
+
+    # Blended consensus + top-10 pool
+    set4 = sorted(top_blended(blend, balls))
+    pool10 = sorted(top_blended(blend, 10))
+
+    return set1, set2, set3, set4, pool10
 
 
 # ── HTML builder ──────────────────────────────────────────────────────────────
@@ -113,7 +116,7 @@ def game_section(game_key, cfg, draws):
     if not draws:
         return f'<p style="color:#888;">No draw data available for {cfg["name"]} in the last 30 days.</p>'
 
-    s1, s2, s3 = generate_picks(draws, cfg["balls"], cfg["max_num"])
+    s1, s2, s3, s4, pool10 = generate_picks(draws, cfg["balls"], cfg["max_num"])
     color = cfg["color"]
 
     return f"""
@@ -127,6 +130,8 @@ def game_section(game_key, cfg, draws):
         {picks_row('🔥 Hot',      s1, color)}
         {picks_row('⚖️ Balanced', s2, color)}
         {picks_row('🍀 Lucky',    s3, color)}
+        {picks_row('🎯 Blended',  s4, color)}
+        {picks_row('🔟 Top-10',   pool10, color)}
       </table>
     </div>"""
 
