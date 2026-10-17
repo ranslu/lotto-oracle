@@ -1452,8 +1452,8 @@ elif pg=="r":
 
     st.markdown("---")
 
-    tab1,tab2,tab3,tab4,tab5,tab6,tab7=st.tabs([
-        "🔗 Pairs","📅 Draw Day","🔢 Consecutive","📦 Groups","🎟️ Ticket Checker","🎲 Odds","Δ Delta"])
+    tab1,tab_tri,tab2,tab3,tab4,tab5,tab6,tab7=st.tabs([
+        "🔗 Pairs","🔺 Triplets","📅 Draw Day","🔢 Consecutive","📦 Groups","🎟️ Ticket Checker","🎲 Odds","Δ Delta"])
 
     with tab1:
         st.markdown("<p style='color:#a0c4e8;font-weight:700;font-size:15px;'>📊 Top 20 Number Pairs</p>",unsafe_allow_html=True)
@@ -1476,6 +1476,42 @@ elif pg=="r":
             fig_h.update_layout(template="plotly_dark",height=500,margin=dict(l=10,r=10,t=10,b=10),
                                 plot_bgcolor="#050d1a",paper_bgcolor="#050d1a")
             st.plotly_chart(fig_h,use_container_width=True)
+
+    with tab_tri:
+        sub_df=df.sort_values("date",ascending=False).head(n_draws)
+        trip=Counter(); trip_last={}; run3=Counter(); run3_last={}; draws_with_run=0
+        for dt,nums in zip(sub_df["date"],sub_df["numbers"]):   # newest first -> first hit is last seen
+            s=sorted(nums); ss=set(s)
+            for t in combinations(s,3):
+                trip[t]+=1; trip_last.setdefault(t,dt)
+            found_run=False
+            for a in s:
+                if a+1 in ss and a+2 in ss:
+                    k=(a,a+1,a+2); run3[k]+=1; run3_last.setdefault(k,dt); found_run=True
+            draws_with_run+=found_run
+        nd=len(sub_df)
+        exp=nd*math.comb(balls_per_draw,3)/math.comb(pool,3)
+        st.markdown("<p style='color:#a0c4e8;font-weight:700;font-size:15px;'>🔺 Top 20 Number Triplets</p>",unsafe_allow_html=True)
+        st.caption(f"⚠️ By pure chance each of the {math.comb(pool,3):,} possible triplets is expected ≈ {exp:.2f}× in {nd} draws — "
+                   "a triplet showing 3–4 hits is normal luck, not a signal. Shown for curiosity, not prediction.")
+        def _tri_df(counter,last):
+            return pd.DataFrame([(" + ".join(f"{n:02d}" for n in t),c,pd.to_datetime(last[t]).strftime("%Y-%m-%d"),
+                                  f"{c/exp:.1f}×" if exp else "—") for t,c in counter.most_common(20)],
+                                columns=["Triplet","Times","Last Seen","vs Chance"])
+        tdf=_tri_df(trip,trip_last)
+        fig_t=px.bar(tdf,x="Times",y="Triplet",orientation="h",color="Times",
+                     color_continuous_scale=[[0,"#0d2a4a"],[1,gcolor]])
+        fig_t.update_layout(template="plotly_dark",height=500,margin=dict(l=10,r=10,t=10,b=10),
+                            coloraxis_showscale=False,plot_bgcolor="#050d1a",paper_bgcolor="#050d1a",
+                            yaxis=dict(autorange="reversed"))
+        st.plotly_chart(fig_t,use_container_width=True)
+        st.dataframe(tdf,use_container_width=True,hide_index=True)
+        st.markdown("<p style='color:#a0c4e8;font-weight:700;font-size:15px;'>🔢 Consecutive Triplets (runs of 3, e.g. 14-15-16)</p>",unsafe_allow_html=True)
+        if run3:
+            st.dataframe(_tri_df(run3,run3_last).drop(columns=["vs Chance"]),use_container_width=True,hide_index=True)
+            st.markdown(f"Draws containing a run of 3: **{draws_with_run}** of {nd} ({draws_with_run/nd*100:.0f}%)")
+        else:
+            st.info("No runs of 3 consecutive numbers in this period.")
 
     with tab2:
         st.markdown("<p style='color:#a0c4e8;font-weight:700;font-size:15px;'>📅 Do numbers favour certain draw days?</p>",unsafe_allow_html=True)
