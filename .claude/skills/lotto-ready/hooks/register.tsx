@@ -4,7 +4,8 @@ import type { EngineInterface, Register } from 'claude-code'
 import type { Readiness } from '../types'
 import { check } from './ready'
 
-const DATA = 'lottery_data.json'
+const REPO = '/home/user/lotto-oracle'
+const DATA = `${REPO}/lottery_data.json`
 const EVERY = 30 * 60_000
 
 const readiness = atom({ plugin: 'lotto-ready', key: 'readiness' } as const, null)
@@ -15,7 +16,7 @@ async function runCheck($: EngineInterface, isQuiet = false): Promise<Readiness>
   try {
     result = check(JSON.parse(await $.fs.read(DATA)), await $.clock.now())
   } catch (err) {
-    result = { checkedAt: '', behind: [], next: '', error: `can't read ${DATA}` }
+    result = { checkedAt: '', behind: [], next: '', error: `can't read lottery_data.json` }
   }
   const was = await read($, readiness)
   await update($, readiness, () => result)
@@ -39,7 +40,7 @@ async function refresh($: EngineInterface): Promise<string> {
   await update($, isRefreshing, () => true)
   $.ui.status('🎰 refreshing lottery data…')
   try {
-    const ran = await $.process.run(['python3', 'fetch_lottery.py'], { timeoutMs: 180_000 })
+    const ran = await $.process.run(['python3', 'fetch_lottery.py'], { cwd: REPO, timeoutMs: 180_000 })
     const after = await runCheck($, true)
     if (ran.exitCode !== 0) return `fetch_lottery.py failed (exit ${ran.exitCode}): ${ran.stderr.slice(-300)}`
     return after.behind.length

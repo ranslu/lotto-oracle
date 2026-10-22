@@ -1,0 +1,6 @@
+{
+  "name": "file-tree",
+  "version": "0.1.0",
+  "description": "Project file tree in a pane, marking files read and edited this session; click folders to open them.",
+  "types": "./types/index.d.ts"
+}

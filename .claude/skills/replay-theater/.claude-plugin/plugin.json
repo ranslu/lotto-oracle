@@ -1,0 +1,6 @@
+{
+  "name": "replay-theater",
+  "version": "0.1.0",
+  "description": "Replays this session's tool calls scene by scene, with step controls and autoplay.",
+  "types": "./types/index.d.ts"
+}

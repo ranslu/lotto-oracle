@@ -12,3 +12,8 @@ Streamlit lottery-picks app. Entry: `lotto2.py`. Data fetch: `fetch_lottery.py` 
 
 ## Reference
 - LLM token/prompt-caching cost notes: `.claude/skills/token-caching/SKILL.md` (loaded on demand via the `token-caching` skill).
+
+## Mods (`.claude/skills/<name>/`, function-hook plugins; load with hot reloading on)
+- `lotto-ready`: status line + band when `lottery_data.json` lags the draw schedule; `/lotto-check`, `/lotto-refresh`.
+- `savvy-progress` (`/progress`), `file-tree` (`/files [dir]`), `replay-theater` (`/replay [last|n]`): general session panes.
+- Check a mod with `claude plugin validate <dir>` and `claude plugin test <dir>`.

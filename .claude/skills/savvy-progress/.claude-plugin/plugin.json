@@ -1,0 +1,6 @@
+{
+  "name": "savvy-progress",
+  "version": "0.1.0",
+  "description": "Live turn tracker: elapsed time, current tool, step list and recent-turn history in a pane and the status line.",
+  "types": "./types/index.d.ts"
+}
