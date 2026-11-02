@@ -24,11 +24,15 @@ jobs:
       - name: Fetch last 24h lottery draws
         run: python fetch_lottery.py
 
-      - name: Commit updated data
+      - name: Build morning brief (docs/brief.html)
+        continue-on-error: true   # a brief problem must never block the email
+        run: python generate_brief.py
+
+      - name: Commit updated data and brief
         uses: stefanzweifel/git-auto-commit-action@v6
         with:
-          commit_message: "chore: auto-update lottery data [skip ci]"
-          file_pattern: lottery_data.json
+          commit_message: "chore: auto-update lottery data and brief [skip ci]"
+          file_pattern: lottery_data.json docs/brief.html
 
       - name: Email daily picks
         env:

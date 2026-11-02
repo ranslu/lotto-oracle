@@ -3,15 +3,30 @@
 Daily lottery picks emailer — uses last 30 days of draw data.
 Run after fetch_lottery.py in GitHub Actions.
 """
-import json, os, smtplib, random
+import json, os, smtplib, random, sys, traceback
 from datetime import datetime, timedelta
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from collections import Counter
 
-GMAIL_ADDRESS    = os.environ["GMAIL_ADDRESS"]
-GMAIL_APP_PASS   = os.environ["GMAIL_APP_PASSWORD"]
-RECIPIENT        = os.environ["RECIPIENT_EMAIL"]
+
+def require_env(name: str) -> str:
+    """Fetch a required secret/env var, or fail loudly with a clear message
+    instead of a bare KeyError traceback."""
+    value = os.environ.get(name)
+    if not value:
+        print(
+            f"[fatal] Required environment variable/secret '{name}' is not set. "
+            f"Check the repo's Settings -> Secrets and variables -> Actions.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    return value
+
+
+GMAIL_ADDRESS    = require_env("GMAIL_ADDRESS")
+GMAIL_APP_PASS   = require_env("GMAIL_APP_PASSWORD")
+RECIPIENT        = require_env("RECIPIENT_EMAIL")
 
 GAMES = {
     "lotto_max":   {"name": "Lotto Max",   "balls": 7,  "max_num": 50, "color": "#7c3aed"},
@@ -178,11 +193,26 @@ def send_email(html_body):
     msg["To"]      = RECIPIENT
     msg.attach(MIMEText(html_body, "html"))
 
-    with smtplib.SMTP("smtp.gmail.com", 587) as server:
-        server.ehlo()
-        server.starttls()
-        server.login(GMAIL_ADDRESS, GMAIL_APP_PASS)
-        server.sendmail(GMAIL_ADDRESS, RECIPIENT, msg.as_string())
+    try:
+        with smtplib.SMTP("smtp.gmail.com", 587) as server:
+            server.ehlo()
+            server.starttls()
+            server.login(GMAIL_ADDRESS, GMAIL_APP_PASS)
+            server.sendmail(GMAIL_ADDRESS, RECIPIENT, msg.as_string())
+    except smtplib.SMTPAuthenticationError as e:
+        print(
+            f"[fatal] Gmail login failed for {GMAIL_ADDRESS}: {e}\n"
+            f"        The GMAIL_APP_PASSWORD secret is likely stale/revoked "
+            f"(Google invalidates App Passwords when the account password changes). "
+            f"Generate a new one at https://myaccount.google.com/apppasswords and "
+            f"update the GMAIL_APP_PASSWORD secret in this repo.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    except Exception as e:
+        print(f"[fatal] Failed to send email: {type(e).__name__}: {e}", file=sys.stderr)
+        traceback.print_exc()
+        sys.exit(1)
 
     print(f"Email sent to {RECIPIENT}")
 
